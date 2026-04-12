@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.autotrading.scheduled</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/dawn-h/PycharmProjects/auto-trading/.venv/bin/python</string>
+        <string>-m</string>
+        <string>trading.main</string>
+        <string>--mode</string>
+        <string>single</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/dawn-h/PycharmProjects/auto-trading</string>
+
+    <key>StandardOutPath</key>
+    <string>/Users/dawn-h/PycharmProjects/auto-trading/logs/scheduled.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/dawn-h/PycharmProjects/auto-trading/logs/scheduled_error.log</string>
+
+    <!-- 매일 9시, 13시, 17시, 21시에 실행 (4시간 간격) -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>13</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>17</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>21</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
+</dict>
+</plist>

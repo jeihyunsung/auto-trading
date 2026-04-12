@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>QQQ 지지선 분석 — 피보나치 되돌림</title>
+<style>
+  body { background: #1a1a2e; color: #eee; font-family: 'Pretendard', -apple-system, sans-serif; margin: 20px; }
+  h1 { color: #00d4aa; font-size: 20px; }
+  h2 { color: #888; font-size: 15px; margin-top: 30px; }
+  .chart-container { position: relative; width: 900px; height: 520px; border: 1px solid #333; background: #16213e; margin: 20px 0; }
+  svg { width: 100%; height: 100%; }
+  .label { font-size: 11px; fill: #aaa; }
+  .price-label { font-size: 12px; font-weight: bold; }
+  .legend { margin: 20px 0; padding: 15px; background: #16213e; border: 1px solid #333; border-radius: 8px; width: 900px; box-sizing: border-box; }
+  .legend h3 { color: #00d4aa; margin-top: 0; }
+  .legend table { border-collapse: collapse; width: 100%; }
+  .legend td, .legend th { padding: 8px 12px; text-align: left; border-bottom: 1px solid #333; }
+  .legend th { color: #888; font-weight: normal; }
+  .check { color: #00d4aa; }
+  .warn { color: #ff6b6b; }
+  .neutral { color: #ffd93d; }
+  .note { background: #1a1a3e; padding: 15px; border-left: 3px solid #00d4aa; margin: 15px 0; width: 900px; box-sizing: border-box; border-radius: 0 8px 8px 0; }
+  .note-warn { border-left-color: #ffd93d; }
+  .two-col { display: flex; gap: 20px; }
+  .two-col > div { flex: 1; }
+</style>
+</head>
+<body>
+
+<h1>QQQ 지지선 분석 — 피보나치 되돌림 기반</h1>
+<p style="color:#888; margin-top:-10px;">QQQ는 2023~2025 장기 상승 차트로, 뚜렷한 수평 지지선이 없음 → 피보나치 되돌림으로 지지 가격대 추정</p>
+
+<!-- ============ CHART ============ -->
+<div class="chart-container">
+<svg viewBox="0 0 900 520">
+  <defs>
+    <pattern id="grid" width="50" height="50" patternUnits="userSpaceOnUse">
+      <path d="M 50 0 L 0 0 0 50" fill="none" stroke="#1e2d4a" stroke-width="0.5"/>
+    </pattern>
+    <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#00d4aa" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#00d4aa" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="520" fill="url(#grid)"/>
+
+  <!-- Y axis: $270(저점) ~ $540(고점), 매핑: $540=y40, $270=y440 -->
+  <!-- 1px = ($540-$270)/(440-40) = $0.675 -->
+  <!-- y = 40 + (540 - price) / 0.675 -->
+
+  <!-- Y axis labels -->
+  <text x="855" y="44" class="label">$540</text>
+  <text x="855" y="118" class="label">$490</text>
+  <text x="855" y="192" class="label">$440</text>
+  <text x="855" y="266" class="label">$390</text>
+  <text x="855" y="340" class="label">$340</text>
+  <text x="855" y="414" class="label">$290</text>
+  <text x="855" y="444" class="label">$270</text>
+
+  <!-- X axis labels -->
+  <text x="50" y="490" class="label">2022.10</text>
+  <text x="170" y="490" class="label">2023.03</text>
+  <text x="290" y="490" class="label">2023.09</text>
+  <text x="410" y="490" class="label">2024.03</text>
+  <text x="530" y="490" class="label">2024.09</text>
+  <text x="650" y="490" class="label">2025.01</text>
+  <text x="780" y="490" class="label">2025.04</text>
+
+  <!-- Price area fill -->
+  <polygon
+    fill="url(#priceGrad)"
+    points="
+      40,440  60,430  80,415  100,400  120,380  140,365
+      160,340  180,320  200,305  220,285  240,275  260,260
+      280,250  300,240  320,225  340,215  360,200  380,190
+      400,175  420,165  440,155  460,145  480,130  500,120
+      520,108  540,98   560,88   580,78   600,68   620,58
+      640,52   660,46   680,42   700,40
+      720,55   740,85   760,140  780,175  800,195  820,170
+      820,460  40,460
+    "
+  />
+
+  <!-- Price line -->
+  <polyline
+    fill="none" stroke="#00d4aa" stroke-width="2.5" stroke-linejoin="round"
+    points="
+      40,440  60,430  80,415  100,400  120,380  140,365
+      160,340  180,320  200,305  220,285  240,275  260,260
+      280,250  300,240  320,225  340,215  360,200  380,190
+      400,175  420,165  440,155  460,145  480,130  500,120
+      520,108  540,98   560,88   580,78   600,68   620,58
+      640,52   660,46   680,42   700,40
+      720,55   740,85   760,140  780,175  800,195  820,170
+    "
+  />
+
+  <!-- ===== Fibonacci Retracement Lines ===== -->
+  <!-- 저점 $270 (y=440), 고점 $540 (y=40), 상승폭 $270 -->
+
+  <!-- 고점 $540 (0%) -->
+  <line x1="35" y1="40" x2="850" y2="40" stroke="#555" stroke-width="0.5"/>
+  <text x="5" y="44" fill="#888" font-size="10">0%</text>
+
+  <!-- 23.6% 되돌림: $540 - 270*0.236 = $476.3 → y = 40 + (540-476)/0.675 = 134.8 -->
+  <line x1="35" y1="135" x2="850" y2="135" stroke="#66bb6a" stroke-width="1.5" stroke-dasharray="6,4"/>
+  <rect x="5" y="125" width="28" height="16" rx="3" fill="#66bb6a" fill-opacity="0.2"/>
+  <text x="8" y="137" fill="#66bb6a" font-size="10" font-weight="bold">23.6%</text>
+  <text x="795" y="131" fill="#66bb6a" font-size="11" font-weight="bold">$476</text>
+
+  <!-- 38.2% 되돌림: $540 - 270*0.382 = $436.9 → y = 40 + (540-437)/0.675 = 192.6 -->
+  <line x1="35" y1="193" x2="850" y2="193" stroke="#ffd93d" stroke-width="2" stroke-dasharray="8,4"/>
+  <rect x="5" y="183" width="28" height="16" rx="3" fill="#ffd93d" fill-opacity="0.2"/>
+  <text x="8" y="195" fill="#ffd93d" font-size="10" font-weight="bold">38.2%</text>
+  <text x="795" y="189" fill="#ffd93d" font-size="11" font-weight="bold">$437</text>
+  <text x="795" y="203" fill="#ffd93d" font-size="9">1차 지지</text>
+
+  <!-- 50% 되돌림: $540 - 270*0.5 = $405 → y = 40 + (540-405)/0.675 = 240 -->
+  <line x1="35" y1="240" x2="850" y2="240" stroke="#ff8c42" stroke-width="2" stroke-dasharray="8,4"/>
+  <rect x="5" y="230" width="28" height="16" rx="3" fill="#ff8c42" fill-opacity="0.2"/>
+  <text x="8" y="242" fill="#ff8c42" font-size="10" font-weight="bold">50%</text>
+  <text x="795" y="236" fill="#ff8c42" font-size="11" font-weight="bold">$405</text>
+  <text x="795" y="250" fill="#ff8c42" font-size="9">2차 지지</text>
+
+  <!-- 61.8% 되돌림: $540 - 270*0.618 = $373.1 → y = 40 + (540-373)/0.675 = 287.4 -->
+  <line x1="35" y1="287" x2="850" y2="287" stroke="#ff6b6b" stroke-width="2" stroke-dasharray="8,4"/>
+  <rect x="5" y="277" width="28" height="16" rx="3" fill="#ff6b6b" fill-opacity="0.2"/>
+  <text x="8" y="289" fill="#ff6b6b" font-size="10" font-weight="bold">61.8%</text>
+  <text x="795" y="283" fill="#ff6b6b" font-size="11" font-weight="bold">$373</text>
+  <text x="795" y="297" fill="#ff6b6b" font-size="9">3차 (마지노)</text>
+
+  <!-- 저점 $270 (100%) -->
+  <line x1="35" y1="440" x2="850" y2="440" stroke="#555" stroke-width="0.5"/>
+  <text x="5" y="444" fill="#888" font-size="10">100%</text>
+
+  <!-- ===== Annotations ===== -->
+
+  <!-- 고점 표시 -->
+  <circle cx="700" cy="40" r="4" fill="#ff6b6b" stroke="#ff6b6b" stroke-width="1"/>
+  <text x="705" y="35" fill="#aaa" font-size="10">고점 $540</text>
+
+  <!-- 저점 표시 -->
+  <circle cx="40" cy="440" r="4" fill="#66bb6a" stroke="#66bb6a" stroke-width="1"/>
+  <text x="48" y="437" fill="#aaa" font-size="10">저점 $270</text>
+
+  <!-- 급락 구간 하이라이트 -->
+  <rect x="710" y="40" width="120" height="165" fill="#ff6b6b" fill-opacity="0.08" stroke="#ff6b6b" stroke-width="1" stroke-dasharray="3,3" rx="4"/>
+  <text x="735" y="110" fill="#ff6b6b" font-size="11" font-weight="bold">급락 구간</text>
+
+  <!-- 현재 가격 표시 (약 $440 부근) -->
+  <circle cx="820" cy="170" r="6" fill="#ff6b6b"/>
+  <text x="750" y="168" fill="#ff6b6b" font-size="11" font-weight="bold">현재 ~$440</text>
+
+  <!-- 현재 가격이 38.2% 근처임을 표시하는 화살표 -->
+  <line x1="830" y1="175" x2="830" y2="190" stroke="#ffd93d" stroke-width="1.5" stroke-dasharray="2,2"/>
+  <text x="833" y="188" fill="#ffd93d" font-size="9">38.2% 근접!</text>
+
+  <!-- 상승폭 표시 -->
+  <line x1="25" y1="440" x2="25" y2="40" stroke="#444" stroke-width="1"/>
+  <line x1="20" y1="440" x2="30" y2="440" stroke="#444" stroke-width="1"/>
+  <line x1="20" y1="40" x2="30" y2="40" stroke="#444" stroke-width="1"/>
+  <text x="10" y="245" fill="#555" font-size="9" transform="rotate(-90, 15, 245)">상승폭 $270</text>
+
+</svg>
+</div>
+
+<!-- ============ LEGEND ============ -->
+<div class="legend">
+  <h3>피보나치 되돌림 지지선</h3>
+  <table>
+    <tr>
+      <th>되돌림</th>
+      <th>가격</th>
+      <th>의미</th>
+      <th>계산</th>
+      <th>판단</th>
+    </tr>
+    <tr>
+      <td style="color:#66bb6a">23.6%</td>
+      <td>$476</td>
+      <td>얕은 조정, 강한 상승 추세</td>
+      <td>$540 - $270 x 0.236</td>
+      <td>여기서 반등하면 추세 매우 강함</td>
+    </tr>
+    <tr>
+      <td style="color:#ffd93d"><strong>38.2%</strong></td>
+      <td><strong>$437</strong></td>
+      <td>건강한 조정, 상승 추세 유지</td>
+      <td>$540 - $270 x 0.382</td>
+      <td class="neutral">1차 지지 — 관심 구간 진입</td>
+    </tr>
+    <tr>
+      <td style="color:#ff8c42"><strong>50.0%</strong></td>
+      <td><strong>$405</strong></td>
+      <td>상승분 절반 반납</td>
+      <td>$540 - $270 x 0.500</td>
+      <td class="neutral">2차 지지 — 적극 관심</td>
+    </tr>
+    <tr>
+      <td style="color:#ff6b6b"><strong>61.8%</strong></td>
+      <td><strong>$373</strong></td>
+      <td>황금비율 지지, 마지막 방어선</td>
+      <td>$540 - $270 x 0.618</td>
+      <td class="warn">3차 지지 — 여기 깨지면 상승 추세 종료</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ============ HOW TO ============ -->
+<div class="note">
+  <strong>TradingView에서 피보나치 그리는 법:</strong><br><br>
+  1. QQQ 주봉(1W) 차트 열기<br>
+  2. 왼쪽 도구바 → 세 번째 아이콘 (기울어진 선) → <strong>"피보나치 되돌림"</strong> 선택<br>
+  3. <strong>저점($270 부근, 2022년 10월)</strong>을 클릭 → <strong>고점($540 부근, 2025년 초)</strong>까지 드래그<br>
+  4. 자동으로 23.6%, 38.2%, 50%, 61.8% 수평선이 표시됨<br>
+  5. 현재 가격이 어떤 선에 가까운지 확인
+</div>
+
+<!-- ============ JUDGMENT ============ -->
+<h2>현재 상태 판단</h2>
+
+<div class="two-col">
+  <div class="note">
+    <strong>현재 가격이 38.2%($437) 근처라면:</strong><br><br>
+    - 1차 지지선에 도달한 상태<br>
+    - 여기서 <strong>양봉 출현</strong> → 반등 시작 신호<br>
+    - 이격도 -10% 이하 + RSI 30 이하와 함께 확인<br>
+    - <strong>3개 중 2개 충족</strong> → 차트 근거 충족
+  </div>
+  <div class="note note-warn">
+    <strong>38.2%를 종가로 이탈하면:</strong><br><br>
+    - 1차 지지 실패 → <strong>50%($405)까지</strong> 열림<br>
+    - $405에서도 못 버티면 → <strong>61.8%($373)</strong><br>
+    - $373마저 깨지면 → 2023~2025 상승 추세 자체가 끝난 것<br>
+    - 이때는 전략 재검토 필요
+  </div>
+</div>
+
+<!-- ============ COMPARISON ============ -->
+<div class="legend" style="margin-top:20px">
+  <h3>이격도 vs 피보나치 비교</h3>
+  <table>
+    <tr>
+      <th></th>
+      <th>이격도 (200일선 기준)</th>
+      <th>피보나치 되돌림</th>
+    </tr>
+    <tr>
+      <td><strong>성격</strong></td>
+      <td>동적 지지선 (매일 바뀜)</td>
+      <td>고정 지지선 (고점/저점 정하면 고정)</td>
+    </tr>
+    <tr>
+      <td><strong>적합한 경우</strong></td>
+      <td>현재 과매도 정도를 수치로 확인</td>
+      <td>하락 시 어디까지 빠질지 가격 수준 확인</td>
+    </tr>
+    <tr>
+      <td><strong>충족 기준</strong></td>
+      <td>-10% 이하 (과매도)</td>
+      <td>38.2% 되돌림 가격에 ±2% 이내</td>
+    </tr>
+    <tr>
+      <td><strong>함께 보면</strong></td>
+      <td colspan="2" style="color:#00d4aa">이격도 -10% 이면서 피보나치 38.2% 근처 → 두 지표가 같은 말을 하고 있음 → 강한 신호</td>
+    </tr>
+  </table>
+</div>
+
+<div class="legend" style="margin-top:20px">
+  <h3>차트 근거 최종 체크리스트</h3>
+  <table>
+    <tr><th>지표</th><th>충족 기준</th><th>확인 도구</th></tr>
+    <tr>
+      <td>이격도 (200일)</td>
+      <td><strong>-10% 이하</strong> (강한 신호: -25%)</td>
+      <td>TradingView → Disparity Index (200)</td>
+    </tr>
+    <tr>
+      <td>RSI (14일)</td>
+      <td><strong>30 이하</strong> (강한 신호: 20 이하)</td>
+      <td>TradingView → RSI</td>
+    </tr>
+    <tr>
+      <td>지지선</td>
+      <td><strong>피보나치 38.2%/50%/61.8% 가격에 ±2% 이내</strong></td>
+      <td>TradingView → 피보나치 되돌림 도구</td>
+    </tr>
+    <tr>
+      <td colspan="3" style="color:#00d4aa; text-align:center"><strong>3개 중 2개 이상 충족 → 차트 근거 충족</strong></td>
+    </tr>
+  </table>
+</div>
+
+</body>
+</html>
