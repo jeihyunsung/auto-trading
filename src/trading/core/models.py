@@ -118,16 +118,6 @@ class GlobalMetrics(BaseModel):
     last_updated: datetime
 
 
-class NewsArticle(BaseModel):
-    """News article from RSS feed."""
-
-    title: str
-    link: str
-    source: str
-    published: datetime | None = None
-    summary: str | None = None
-
-
 class MarketAnomaly(BaseModel):
     """Detected market anomaly."""
 

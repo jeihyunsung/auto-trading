@@ -1,13 +1,11 @@
 """Risk validation agent."""
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from decimal import Decimal
 
-# Korea Standard Time (UTC+9)
-KST = timezone(timedelta(hours=9))
-
 from trading.adapters.upbit import UpbitBrokerAdapter, get_broker
+from trading.core.time import KST
 from trading.config import get_settings
 from trading.core.isolated_balance import get_isolated_tracker
 from trading.core.state import Decision, Portfolio, TradingState
@@ -58,12 +56,15 @@ class RiskAgent:
                 f"Using isolated balance: KRW={portfolio['krw_balance']:,.0f}, "
                 f"BTC={portfolio['btc_balance']:.8f}, exposure={portfolio['exposure_pct']:.1f}%"
             )
+            # Use tracker's midnight-rebased daily P&L (not cumulative pnl_pct)
+            # so the RiskManager's daily loss limit only triggers on today's
+            # drawdown, not multi-day cumulative loss.
             return PortfolioState(
                 total_value_krw=portfolio["total_value_krw"],
                 cash_krw=portfolio["krw_balance"],
                 btc_value_krw=portfolio["btc_value_krw"],
-                daily_pnl_pct=portfolio["pnl_pct"],
-                unrealized_pnl_pct=0.0,
+                daily_pnl_pct=portfolio.get("daily_pnl_pct", 0.0),
+                unrealized_pnl_pct=portfolio.get("unrealized_pnl_pct", 0.0),
             )
 
         # Use actual exchange balance

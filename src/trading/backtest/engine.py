@@ -141,15 +141,25 @@ class BacktestResult:
 class BacktestEngine:
     """Engine for running backtests on trading strategies."""
 
-    def __init__(self, config: BacktestConfig | None = None):
+    def __init__(
+        self,
+        config: BacktestConfig | None = None,
+        derivatives_by_ts: dict | None = None,
+    ):
         """Initialize backtest engine.
 
         Args:
             config: Backtest configuration.
+            derivatives_by_ts: Optional pre-loaded historical derivatives data,
+                keyed by datetime. See backtest.derivatives_loader.
+                If provided, each cycle's TradingState gets the nearest past
+                snapshot — closes the "all-zero derivatives" gap that makes
+                LLM decisions overly conservative in backtests.
         """
         self.config = config or BacktestConfig()
         self.indicator_agent = IndicatorAgent()
         self.decision_agent = DecisionAgent()
+        self._derivatives_by_ts = derivatives_by_ts or {}
 
         # Hysteresis manager (optional)
         self._hysteresis: HysteresisManager | None = None
@@ -337,9 +347,18 @@ class BacktestEngine:
         else:
             unrealized_pnl = 0.0
 
+        # Look up the nearest past derivatives snapshot (if loaded)
+        derivatives = None
+        if self._derivatives_by_ts:
+            from trading.backtest.derivatives_loader import lookup_nearest_past
+            derivatives = lookup_nearest_past(
+                self._derivatives_by_ts, data_point.timestamp
+            )
+
         state: TradingState = {
             "market": market_data,
             "indicators": indicators,
+            "derivatives": derivatives,
             "portfolio": {
                 "cash_krw": self._cash_krw,
                 "btc_balance": self._btc_quantity,
@@ -353,7 +372,6 @@ class BacktestEngine:
                 "daily_loss_pct": 0.0,
                 "is_kill_switch_on": False,
             },
-            "news": None,
             "anomalies": [],
             "decision": None,
             "error": None,

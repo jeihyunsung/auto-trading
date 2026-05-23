@@ -7,11 +7,10 @@ files for time-series visualization in the dashboard.
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
-# Korea Standard Time (UTC+9)
-KST = timezone(timedelta(hours=9))
+from trading.core.time import KST
 
 logger = logging.getLogger(__name__)
 

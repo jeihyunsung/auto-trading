@@ -9,12 +9,11 @@ import asyncio
 import logging
 import signal
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 
 from trading.adapters.upbit import UpbitBrokerAdapter, get_broker
 from trading.agents.decision_agent import set_hysteresis_manager
-from trading.agents.news_agent import set_news_enabled
 from trading.config import get_settings
 from trading.core.decision_history import DecisionHistoryWriter, set_decision_writer
 from trading.core.derivatives_history import DerivativesHistoryWriter, set_derivatives_writer
@@ -25,7 +24,6 @@ from trading.core.isolated_balance import (
     set_isolated_tracker,
 )
 from trading.core.hysteresis import HysteresisConfig, HysteresisManager
-from trading.core.news_memory import NewsMemory, NewsMemoryConfig, set_news_memory
 from trading.core.performance import (
     PerformanceConfig,
     PerformanceTracker,
@@ -34,7 +32,7 @@ from trading.core.performance import (
 from trading.core.state import create_initial_state
 from trading.events.dispatcher import EventDispatcher
 from trading.events.models import EventBatch, MarketEvent
-from trading.graph.builder import trading_graph
+from trading.graph.builder import simple_pipeline
 from trading.streaming.connection import StreamConfig, StreamType, UpbitStreamManager
 from trading.streaming.handlers import MessageRouter
 from trading.triggers.conditions import BatchConfig, CooldownConfig, TriggerThresholds
@@ -67,9 +65,7 @@ class EventDrivenTradingBot:
         cooldown: CooldownConfig | None = None,
         batch: BatchConfig | None = None,
         hysteresis_config: HysteresisConfig | None = None,
-        news_memory_enabled: bool = True,
         performance_tracking: bool = True,
-        news_enabled: bool = True,
     ):
         """Initialize event-driven trading bot.
 
@@ -79,9 +75,7 @@ class EventDrivenTradingBot:
             cooldown: Cooldown configuration.
             batch: Batch configuration.
             hysteresis_config: Optional hysteresis configuration. None to disable.
-            news_memory_enabled: Enable news memory system.
             performance_tracking: Enable performance tracking.
-            news_enabled: Enable news collection. If False, only technical analysis.
         """
         self.symbols = symbols
 
@@ -100,13 +94,6 @@ class EventDrivenTradingBot:
         self._hysteresis: HysteresisManager | None = None
         if hysteresis_config is not None:
             self._hysteresis = HysteresisManager(hysteresis_config)
-
-        # Initialize news memory
-        self._news_memory: NewsMemory | None = None
-        self._news_memory_enabled = news_memory_enabled
-
-        # News collection flag
-        self._news_enabled = news_enabled
 
         # Initialize performance tracker
         self._tracker: PerformanceTracker | None = None
@@ -151,19 +138,6 @@ class EventDrivenTradingBot:
         if self._hysteresis is not None:
             set_hysteresis_manager(self._hysteresis)
 
-        # Configure global news collection flag
-        set_news_enabled(self._news_enabled)
-
-        # Configure global news memory
-        if self._news_memory_enabled and settings.news_memory_enabled:
-            self._news_memory = NewsMemory(
-                NewsMemoryConfig(
-                    ttl=timedelta(hours=settings.news_memory_ttl_hours),
-                    decay_half_life=timedelta(hours=settings.news_decay_half_life_hours),
-                )
-            )
-            set_news_memory(self._news_memory)
-
         # Configure performance tracker
         # Always use shared broker instance
         self._broker = get_broker()
@@ -204,18 +178,6 @@ class EventDrivenTradingBot:
             )
         else:
             logger.info("Hysteresis: disabled")
-        # Log news collection status
-        if self._news_enabled:
-            logger.info("News collection: enabled")
-            if self._news_memory:
-                logger.info(
-                    f"News memory: enabled (ttl={settings.news_memory_ttl_hours}h, "
-                    f"decay={settings.news_decay_half_life_hours}h)"
-                )
-            else:
-                logger.info("News memory: disabled")
-        else:
-            logger.info("News collection: disabled (technical analysis only)")
         if self._tracker:
             logger.info("Performance tracking: enabled")
         else:
@@ -261,9 +223,6 @@ class EventDrivenTradingBot:
 
         # Cleanup hysteresis manager
         set_hysteresis_manager(None)
-
-        # Cleanup news memory
-        set_news_memory(None)
 
         # Generate performance report
         if self._tracker:
@@ -343,7 +302,7 @@ class EventDrivenTradingBot:
             state["anomalies"] = [e.to_anomaly_dict() for e in batch.events]
 
             # Run the existing LangGraph pipeline
-            final_state = trading_graph.invoke(state)
+            final_state = simple_pipeline.invoke(state)
 
             # Log decision
             decision = final_state.get("decision")
@@ -427,18 +386,6 @@ class EventDrivenTradingBot:
                 else:
                     logger.info(f"  {key}: {value}")
 
-        # Log news memory statistics
-        if self._news_memory:
-            logger.info("-" * 60)
-            logger.info("News Memory Statistics:")
-            for key, value in self._news_memory.get_stats().items():
-                if isinstance(value, float):
-                    logger.info(f"  {key}: {value:.2f}")
-                elif isinstance(value, dict):
-                    logger.info(f"  {key}: {value}")
-                else:
-                    logger.info(f"  {key}: {value}")
-
         # Log isolated mode statistics
         isolated_tracker = get_isolated_tracker()
         if isolated_tracker is not None:
@@ -458,9 +405,7 @@ async def run_bot(
     cooldown_seconds: float = 60.0,
     batch_window_seconds: float = 10.0,
     hysteresis_config: HysteresisConfig | None = None,
-    news_memory_enabled: bool = True,
     performance_tracking: bool = True,
-    news_enabled: bool = True,
 ) -> None:
     """Run the event-driven trading bot.
 
@@ -469,9 +414,7 @@ async def run_bot(
         cooldown_seconds: Minimum seconds between LLM calls.
         batch_window_seconds: Seconds to batch events.
         hysteresis_config: Optional hysteresis configuration. None to disable.
-        news_memory_enabled: Enable news memory system.
         performance_tracking: Enable performance tracking.
-        news_enabled: Enable news collection. If False, only technical analysis.
     """
     settings = get_settings()
 
@@ -490,9 +433,7 @@ async def run_bot(
         cooldown=CooldownConfig(min_interval_seconds=cooldown_seconds),
         batch=BatchConfig(batch_window_seconds=batch_window_seconds),
         hysteresis_config=hysteresis_config,
-        news_memory_enabled=news_memory_enabled,
         performance_tracking=performance_tracking,
-        news_enabled=news_enabled,
     )
 
     # Handle shutdown signals
@@ -610,11 +551,6 @@ def main() -> None:
         action="store_true",
         help="Reset isolated balance to initial state (clears all holdings)",
     )
-    parser.add_argument(
-        "--no-news",
-        action="store_true",
-        help="Disable news collection and sentiment analysis (technical indicators only)",
-    )
 
     args = parser.parse_args()
 
@@ -669,7 +605,6 @@ def main() -> None:
             cooldown_seconds=args.cooldown,
             batch_window_seconds=args.batch_window,
             hysteresis_config=hysteresis_config,
-            news_enabled=not args.no_news,
         )
     )
 

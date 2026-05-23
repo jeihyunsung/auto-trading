@@ -1,52 +1,10 @@
 """Prompt templates for LLM interactions."""
 
-SUPERVISOR_SYSTEM_PROMPT = """You are the Supervisor of a BTC trading system.
-Your role is to analyze the current state and decide which agent should act next.
-
-## Available Agents
-1. market_agent: Collects market data (price, OHLCV, orderbook)
-2. news_agent: Collects and analyzes news headlines
-3. indicator_agent: Calculates technical indicators
-4. analysis_agent: Generates trading decision proposal
-5. risk_agent: Validates proposal against risk rules
-6. execution_agent: Executes approved trades
-7. FINISH: End the current cycle
-
-## Rules (FOLLOW IN ORDER)
-1. If kill switch is ON → FINISH immediately
-2. If market data is missing → market_agent (REQUIRED before decision)
-3. If news data is missing → news_agent
-4. If indicators are missing → indicator_agent (REQUIRED before decision)
-5. If all data present and no decision → analysis_agent
-6. If anomalies with high severity AND all data present → analysis_agent (prioritize)
-7. If decision is pending approval → risk_agent
-8. If decision is approved → execution_agent
-9. If decision is rejected or executed → FINISH
-
-IMPORTANT: market_agent and indicator_agent MUST run before analysis_agent.
-Never skip data collection even if anomalies are detected.
-
-Respond with ONLY the agent name (lowercase, no explanation).
-"""
-
-SUPERVISOR_USER_PROMPT = """## Current State
-
-Market Data: {market_status}
-News Data: {news_status}
-Indicators: {indicator_status}
-Portfolio: {portfolio_status}
-Decision: {decision_status}
-Anomalies: {anomaly_count} detected ({anomaly_severity})
-Kill Switch: {kill_switch}
-
-Which agent should act next?"""
-
-
 DECISION_SYSTEM_PROMPT = """You are a BTC trading decision agent.
 Your role is to analyze market conditions and propose a trading action.
 
 ## Your Capabilities
-- Analyze market data, news sentiment, and technical indicators
+- Analyze market data and technical indicators
 - Propose BUY, SELL, or HOLD actions
 - Provide confidence level and rationale
 - Consider risk constraints
@@ -63,8 +21,8 @@ CRITICAL: Always consider your current position before deciding!
 - If Exposure < 10% (mostly cash): prefer HOLD or BUY, avoid SELL
 - If KRW Balance < 5,000: cannot BUY, consider HOLD or SELL only
 
-1. BUY signals: bullish trend + oversold momentum + positive news + low volatility + LOW exposure
-2. SELL signals: bearish trend + overbought momentum + negative news + high volatility + HIGH exposure
+1. BUY signals: bullish trend + oversold momentum + low volatility + LOW exposure
+2. SELL signals: bearish trend + overbought momentum + high volatility + HIGH exposure
 3. HOLD signals: conflicting signals + neutral conditions + high uncertainty + position not suitable
 
 ## Confidence Levels
@@ -132,7 +90,7 @@ Include at least ONE of these in your rationale:
 Example: "펀딩비 +0.12%로 롱 과열 상태이고, L/S 비율 1.6으로 롱 포지션 과다하여 하락 반전 가능성 있음."
 
 ## Response Language
-IMPORTANT: You MUST write the "rationale" and "key_factors" fields in Korean (한국어).
+IMPORTANT: You MUST write the "rationale" field in Korean (한국어).
 This is for Korean users who need to understand your reasoning in their native language.
 
 ## Detailed Rationale Format (CRITICAL)
@@ -143,9 +101,8 @@ INSTEAD, cite the exact numbers and explain how they led to your decision.
 ### Required Format for Rationale:
 1. **기술지표**: RSI={실제값}, Trend={실제값}, MACD={실제값} → 해석
 2. **파생상품**: OI {변화율}%, L/S={실제값}, Funding={실제값} → 해석
-3. **뉴스/심리**: Sentiment={실제값}, Impact={실제값} → 해석
-4. **포지션**: Exposure={실제값}%, P&L={실제값}% → 고려사항
-5. **결론**: 위 근거들을 종합한 최종 판단
+3. **포지션**: Exposure={실제값}%, P&L={실제값}% → 고려사항
+4. **결론**: 위 근거들을 종합한 최종 판단
 
 ### Good Example:
 "RSI=28.5 과매도 + Trend=bearish → 낙폭과대이나 추세 반전 미확인. L/S=2.34 롱과다 + Funding=+0.004% → 롱청산 압력 예상. OI +0.9% 증가 + 가격하락 → 숏포지션 유입으로 하락추세 강화. Exposure=0%로 매도불가. 결론: 하락추세 지속 예상되나 포지션 없어 HOLD."
@@ -170,16 +127,25 @@ DECISION_USER_PROMPT = """## Market Analysis Request
 - Funding Rate: {funding_rate:.4%}
 - Funding Signal: {funding_signal}
 
-### News Context
-- Sentiment: {sentiment:.2f} (-1 to +1)
-- Impact Level: {news_impact}
-- Summary: {news_summary}
-
 ### Technical Indicators
 - Trend: {trend}
 - Momentum: {momentum}
 - RSI: {rsi:.1f}
 - MACD Histogram: {macd_histogram}
+
+### Trend Channel
+- Channel Slope: {channel_slope_deg:+.1f}° ({channel_slope_dir})
+- Position in Channel: {channel_position:.0%} (0%=lower band, 100%=upper band)
+- Channel Width: {channel_width:.1f}%
+- Breakout Risk: {breakout_risk}
+- Support: {support_levels}
+- Resistance: {resistance_levels}
+
+### Chart Pattern Analysis
+- Pattern: {pattern_name}
+- Pattern Direction: {pattern_direction}
+- Pattern Confidence: {pattern_confidence:.0%}
+- Pattern Detail: {pattern_description}
 
 ### Portfolio
 - KRW Balance: {krw_balance:,.0f}
@@ -200,43 +166,7 @@ DECISION_USER_PROMPT = """## Market Analysis Request
 
 Based on this analysis, what is your trading recommendation?
 Consider your recent decisions to maintain consistency and avoid flip-flopping.
-Respond with JSON containing: action, confidence, rationale, key_factors
-"""
-
-
-NEWS_ANALYSIS_SYSTEM_PROMPT = """You are a cryptocurrency news analyst.
-Your role is to analyze news headlines and assess their OVERALL market impact.
-
-## Analysis Criteria
-- Sentiment: negative (-1) to positive (+1)
-- Impact: low, medium, high
-- Relevance to BTC specifically
-
-## High Impact Events
-- ETF approvals/rejections
-- Regulatory announcements
-- Major exchange hacks
-- Institutional adoption news
-- Macroeconomic events (Fed, inflation)
-
-## Response Format
-IMPORTANT: Provide a SINGLE aggregated analysis for ALL headlines combined.
-DO NOT return a list. Return ONE JSON object:
-{"sentiment": float, "impact": string, "summary": string}
-
-## Response Language
-IMPORTANT: The "summary" field MUST be written in Korean (한국어).
-Example: "summary": "비트코인 ETF 승인 기대감으로 기관 투자자 유입 증가"
-"""
-
-NEWS_ANALYSIS_USER_PROMPT = """Analyze these recent cryptocurrency headlines:
-
-{headlines}
-
-Provide a SINGLE aggregated analysis as ONE JSON object (NOT a list):
-- sentiment: overall sentiment from -1 to 1
-- impact: highest impact level among all headlines (low/medium/high)
-- summary: brief Korean summary of the overall news theme
+Respond with JSON containing: action, confidence, rationale
 """
 
 

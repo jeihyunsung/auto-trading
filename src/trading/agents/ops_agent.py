@@ -3,17 +3,14 @@
 import logging
 import smtplib
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
-
 from email.mime.text import MIMEText
-
-# Korea Standard Time (UTC+9)
-KST = timezone(timedelta(hours=9))
 
 import requests
 
 from trading.config import get_settings
+from trading.core.time import KST
 from trading.core.decision_history import DecisionRecord, get_decision_writer
 from trading.core.derivatives_history import get_derivatives_writer
 from trading.core.isolated_balance import get_isolated_tracker
@@ -238,48 +235,6 @@ class OpsAgent:
         self.send_alert(f"거래 체결: {action_kr} {symbol}", message, color)
         logger.info(f"Trade alert sent: {action} {quantity:.8f} {symbol} @ {price:,.0f}")
 
-    def alert_anomaly(self, anomalies: list[dict], high_only: bool = True) -> None:
-        """Send alert for detected anomalies.
-
-        Args:
-            anomalies: List of anomaly dicts.
-            high_only: If True, only alert for high severity anomalies.
-        """
-        if not anomalies:
-            return
-
-        # Filter by severity
-        if high_only:
-            alertable = [a for a in anomalies if a.get("severity") == "high"]
-        else:
-            alertable = [
-                a for a in anomalies if a.get("severity") in ("medium", "high")
-            ]
-        if not alertable:
-            return
-
-        # Determine overall severity for color
-        has_high = any(a.get("severity") == "high" for a in alertable)
-        color = "#ff0000" if has_high else "#ffcc00"
-        emoji = "🚨" if has_high else "⚠️"
-
-        # Severity Korean mapping
-        severity_kr = {"high": "높음", "medium": "중간", "low": "낮음"}
-
-        message = f"{emoji} *시장 이상 감지*\n"
-        for anomaly in alertable:
-            severity_icon = "🔴" if anomaly.get("severity") == "high" else "🟡"
-            sev = anomaly.get("severity", "unknown")
-            sev_text = severity_kr.get(sev, sev.upper())
-            message += (
-                f"• {severity_icon} [{sev_text}] "
-                f"{anomaly.get('type', 'unknown')}: {anomaly.get('description', '')}\n"
-            )
-
-        self.send_alert("시장 이상 감지", message, color)
-        severity_filter = "high only" if high_only else "medium+high"
-        logger.warning(f"Anomaly alert sent: {len(alertable)} anomalies ({severity_filter})")
-
     def alert_error(self, error: str, context: str = "") -> None:
         """Send alert for system error.
 
@@ -311,65 +266,6 @@ class OpsAgent:
 
         self.send_alert("긴급 정지 활성화", message, "#ff0000")
         logger.critical(f"Kill switch alert: {reason}")
-
-    def alert_news(self, articles: list[dict], sentiment: float, impact: str) -> None:
-        """Send alert for collected news.
-
-        Args:
-            articles: List of news items with title, source, published.
-            sentiment: Overall sentiment (-1.0 to 1.0).
-            impact: Impact level (low/medium/high).
-        """
-        if not articles:
-            return
-
-        # Sentiment emoji
-        if sentiment > 0.3:
-            sentiment_emoji = "🟢"
-            sentiment_text = "긍정적"
-        elif sentiment < -0.3:
-            sentiment_emoji = "🔴"
-            sentiment_text = "부정적"
-        else:
-            sentiment_emoji = "🟡"
-            sentiment_text = "중립"
-
-        # Impact emoji
-        impact_emoji = {"high": "🔥", "medium": "⚡", "low": "📰"}.get(impact, "📰")
-
-        message = f"📰 *뉴스 업데이트* {sentiment_emoji} {sentiment_text} ({sentiment:+.2f})\n"
-        message += f"• 영향도: {impact_emoji} {impact.upper()}\n"
-        message += f"• 수집된 기사: {len(articles)}건\n\n"
-
-        # Add top 5 headlines with dates
-        for i, article in enumerate(articles[:5], 1):
-            title = article.get("title", "")[:80]
-            source = article.get("source", "Unknown")
-            published = article.get("published", "")
-
-            # Format date
-            if published:
-                try:
-                    dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
-                    date_str = dt.strftime("%m/%d %H:%M")
-                except (ValueError, AttributeError):
-                    date_str = ""
-            else:
-                date_str = ""
-
-            date_part = f" ({date_str})" if date_str else ""
-            message += f"{i}. [{source}]{date_part}\n   {title}\n"
-
-        # Color based on sentiment
-        if sentiment > 0.3:
-            color = "#36a64f"
-        elif sentiment < -0.3:
-            color = "#ff6b6b"
-        else:
-            color = "#808080"
-
-        self.send_alert("News Update", message, color)
-        logger.info(f"News alert sent: {len(articles)} articles, sentiment={sentiment:.2f}")
 
     def alert_decision(
         self,
@@ -407,28 +303,6 @@ class OpsAgent:
 
         self.send_alert(f"거래 결정: {action_kr}", message, color)
         logger.info(f"Decision alert sent: {action} ({confidence:.0%})")
-
-    def send_daily_summary(self, state: TradingState) -> None:
-        """Send daily trading summary.
-
-        Args:
-            state: Current trading state.
-        """
-        portfolio = state.get("portfolio") or {}
-        risk = state.get("risk") or {}
-
-        kill_switch_status = "활성화" if risk.get("is_kill_switch_on") else "비활성화"
-        message = (
-            f"📊 *일일 요약*\n"
-            f"• 현금: {portfolio.get('cash_krw', 0):,.0f} KRW\n"
-            f"• BTC: {portfolio.get('btc_balance', 0):.8f}\n"
-            f"• 노출도: {portfolio.get('exposure_pct', 0):.1f}%\n"
-            f"• 일일 손익: {risk.get('daily_loss_pct', 0):+.2f}%\n"
-            f"• 긴급 정지: {kill_switch_status}"
-        )
-
-        self.send_alert("일일 요약", message, "#36a64f")
-
 
 def ops_agent_node(state: TradingState) -> dict:
     """LangGraph node function for ops agent.

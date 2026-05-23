@@ -1,12 +1,10 @@
 """Market data collection agent."""
 
 import logging
-from datetime import datetime, timedelta, timezone
-
-# Korea Standard Time (UTC+9)
-KST = timezone(timedelta(hours=9))
+from datetime import datetime
 
 from trading.adapters.binance_futures import get_binance_futures_provider
+from trading.core.time import KST
 from trading.adapters.coinmarketcap import CoinMarketCapProvider
 from trading.adapters.upbit import UpbitBrokerAdapter
 from trading.core.anomaly import MarketAnomalyDetector

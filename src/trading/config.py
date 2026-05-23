@@ -24,9 +24,18 @@ class Settings(BaseSettings):
     # CoinMarketCap API
     cmc_api_key: str = Field(default="", description="CoinMarketCap API key")
 
-    # OpenAI API
+    # OpenAI API — tiered models for cost optimization
     openai_api_key: str = Field(default="", description="OpenAI API key")
-    openai_model: str = Field(default="gpt-4o-mini", description="OpenAI model to use")
+    openai_model: str = Field(default="gpt-4o-mini", description="Default OpenAI model")
+    openai_model_decision: str = Field(
+        default="gpt-4o-mini", description="Model for trading decisions (core)"
+    )
+    openai_model_analysis: str = Field(
+        default="gpt-4o-mini", description="Model for news analysis (auxiliary)"
+    )
+    openai_model_vision: str = Field(
+        default="gpt-4o", description="Model for chart pattern vision analysis (conditional)"
+    )
 
     # Slack (optional)
     slack_webhook_url: str = Field(default="", description="Slack webhook URL for alerts")
@@ -67,6 +76,20 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", description="Logging level")
     log_dir: Path = Field(default=Path("logs"), description="Directory for log files")
 
+    # LLM call frequency controls
+    llm_cache_ttl_seconds: int = Field(
+        default=900,
+        ge=60,
+        le=3600,
+        description="Seconds to cache HOLD LLM decisions (default 15min, must exceed polling interval)",
+    )
+    max_trades_per_day: int = Field(
+        default=20,
+        ge=1,
+        le=500,
+        description="Maximum BUY trades per day. SELL is always allowed (stop-loss exemption).",
+    )
+
     # Event-driven streaming mode
     streaming_enabled: bool = Field(
         default=False, description="Enable WebSocket streaming mode"
@@ -79,20 +102,6 @@ class Settings(BaseSettings):
     )
     event_batch_window_seconds: float = Field(
         default=10.0, ge=1.0, description="Seconds to batch events before LLM"
-    )
-
-    # News memory and filtering
-    news_memory_ttl_hours: float = Field(
-        default=4.0, ge=0.5, le=24.0, description="Hours to keep news in memory"
-    )
-    news_decay_half_life_hours: float = Field(
-        default=1.0, ge=0.25, le=4.0, description="Time for news influence to decay by 50%"
-    )
-    news_filter_enabled: bool = Field(
-        default=True, description="Enable event-based news filtering"
-    )
-    news_memory_enabled: bool = Field(
-        default=True, description="Enable news memory system"
     )
 
     # Hysteresis (decision oscillation prevention)

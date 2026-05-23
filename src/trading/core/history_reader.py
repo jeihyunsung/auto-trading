@@ -6,17 +6,15 @@ from JSONL files for dashboard visualization.
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
 from trading.core.decision_history import DecisionRecord
 from trading.core.derivatives_history import DerivativesSnapshot
 from trading.core.indicator_history import IndicatorSnapshot
+from trading.core.time import KST
 
 logger = logging.getLogger(__name__)
-
-# Korea Standard Time (UTC+9)
-KST = timezone(timedelta(hours=9))
 
 
 def normalize_timestamp(dt: datetime) -> datetime:

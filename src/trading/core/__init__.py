@@ -6,7 +6,6 @@ from trading.core.models import (
     MarketSnapshot,
     CMCQuote,
     GlobalMetrics,
-    NewsArticle,
 )
 from trading.core.state import TradingState
 
@@ -16,6 +15,5 @@ __all__ = [
     "MarketSnapshot",
     "CMCQuote",
     "GlobalMetrics",
-    "NewsArticle",
     "TradingState",
 ]

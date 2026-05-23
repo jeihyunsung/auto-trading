@@ -2,17 +2,15 @@
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import TYPE_CHECKING, Literal
-
-# Korea Standard Time (UTC+9)
-KST = timezone(timedelta(hours=9))
 
 # Decision recording moved to ops_agent.py
 from trading.core.position_sizing import PositionSizer, PositionSizingConfig, get_position_sizer
+from trading.core.time import KST
 from trading.core.state import Decision, MultiTimeframeTrendData, TradingState
 from trading.indicators.multi_timeframe import MultiTimeframeTrend, get_mtf_analyzer
-from trading.llm.client import get_llm_client
+from trading.llm.client import get_llm_client, get_response_cache
 from trading.llm.prompts import DECISION_SYSTEM_PROMPT, DECISION_USER_PROMPT
 from trading.llm.schemas import LLMDecisionOutput
 
@@ -313,7 +311,6 @@ class DecisionAgent:
         """
         # Check if we have required data
         market = state.get("market")
-        news = state.get("news")
         indicators = state.get("indicators")
         portfolio = state.get("portfolio")
         risk = state.get("risk", {})
@@ -344,7 +341,7 @@ class DecisionAgent:
         try:
             llm = get_llm_client()
             if llm.is_available:
-                return self._decide_with_llm(state, market, news, indicators, portfolio, risk)
+                return self._decide_with_llm(state, market, indicators, portfolio, risk)
         except Exception as e:
             logger.warning(f"LLM decision failed: {e}")
             # Send Slack alert for LLM error
@@ -356,7 +353,7 @@ class DecisionAgent:
         mtf_trends = state.get("mtf_trends")
 
         # Fallback to rule-based decision
-        return self._decide_rule_based(market, news, indicators, portfolio, risk, derivatives, mtf_trends)
+        return self._decide_rule_based(market, indicators, portfolio, risk, derivatives, mtf_trends)
 
     def _handle_rapid_movement(
         self,
@@ -437,7 +434,6 @@ class DecisionAgent:
         self,
         state: TradingState,
         market: dict,
-        news: dict | None,
         indicators: dict,
         portfolio: dict | None,
         risk: dict,
@@ -447,7 +443,6 @@ class DecisionAgent:
         Args:
             state: Full state.
             market: Market data.
-            news: News context.
             indicators: Indicator signals.
             portfolio: Portfolio state.
             risk: Risk state.
@@ -471,6 +466,18 @@ class DecisionAgent:
         # Get derivatives data
         derivatives = state.get("derivatives") or {}
 
+        # Get trend channel data
+        trend_channel = state.get("trend_channel") or {}
+        channel_slope_deg = trend_channel.get("slope_angle_deg", 0.0)
+        channel_slope_dir = (
+            "uptrend" if channel_slope_deg > 1 else
+            "downtrend" if channel_slope_deg < -1 else
+            "sideways"
+        )
+
+        # Get pattern analysis data
+        pattern = state.get("pattern_analysis") or {}
+
         prompt = DECISION_USER_PROMPT.format(
             symbol=market.get("symbol", "KRW-BTC"),
             current_price=market.get("current_price", 0),
@@ -486,14 +493,27 @@ class DecisionAgent:
             position_bias=derivatives.get("position_bias", "unknown"),
             funding_rate=derivatives.get("funding_rate", 0),
             funding_signal=derivatives.get("funding_signal", "unknown"),
-            # News
-            sentiment=news.get("sentiment", 0) if news else 0,
-            news_impact=news.get("impact", "low") if news else "low",
-            news_summary=news.get("summary", "No news") if news else "No news",
             trend=indicators.get("trend", "neutral"),
             momentum=indicators.get("momentum", "neutral"),
             rsi=indicators.get("signals", {}).get("rsi", 50),
             macd_histogram=indicators.get("signals", {}).get("macd_histogram", 0),
+            # Trend channel data
+            channel_slope_deg=channel_slope_deg,
+            channel_slope_dir=channel_slope_dir,
+            channel_position=trend_channel.get("position_in_channel", 0.5),
+            channel_width=trend_channel.get("channel_width_pct", 0.0),
+            breakout_risk=trend_channel.get("breakout_risk", "unknown"),
+            support_levels=", ".join(
+                f"{s:,.0f}" for s in trend_channel.get("support_levels", [])
+            ) or "N/A",
+            resistance_levels=", ".join(
+                f"{r:,.0f}" for r in trend_channel.get("resistance_levels", [])
+            ) or "N/A",
+            # Pattern analysis data
+            pattern_name=pattern.get("pattern", "none"),
+            pattern_direction=pattern.get("direction", "neutral"),
+            pattern_confidence=pattern.get("confidence", 0.0),
+            pattern_description=pattern.get("description", "패턴 분석 없음"),
             krw_balance=portfolio.get("cash_krw", 0) if portfolio else 0,
             btc_balance=portfolio.get("btc_balance", 0) if portfolio else 0,
             exposure=portfolio.get("exposure_pct", 0) if portfolio else 0,
@@ -504,6 +524,30 @@ class DecisionAgent:
             anomalies=anomaly_text,
             decision_history=decision_history_text,
         )
+
+        # Check cache for similar market state (only HOLD decisions are cached).
+        # Cache key includes derivatives (funding/position_bias/oi_trend) so a
+        # shift in futures sentiment invalidates an otherwise-identical RSI/trend
+        # cache entry — the LLM may now reach a different conclusion.
+        cache = get_response_cache()
+        import hashlib
+        sys_hash = hashlib.md5(DECISION_SYSTEM_PROMPT[:100].encode()).hexdigest()[:8]
+        cache_key = cache.make_key(
+            sys_hash,
+            trend=indicators.get("trend", "neutral"),
+            momentum=indicators.get("momentum", "neutral"),
+            rsi=indicators.get("signals", {}).get("rsi", 50),
+            exposure=round(exposure / 5) * 5,
+            volatility=market.get("volatility_level", "medium"),
+            funding_signal=derivatives.get("funding_signal", "neutral"),
+            position_bias=derivatives.get("position_bias", "balanced"),
+            oi_trend=derivatives.get("oi_trend", "stable"),
+        )
+
+        cached = cache.get(cache_key)
+        if cached is not None:
+            logger.info("Using cached HOLD decision (market state similar to recent call)")
+            return cached
 
         result = llm.invoke_json(DECISION_SYSTEM_PROMPT, prompt, LLMDecisionOutput)
 
@@ -573,7 +617,7 @@ class DecisionAgent:
         else:
             mtf_info = ""
 
-        return Decision(
+        decision = Decision(
             action=final_action,
             confidence=adjusted_confidence,
             suggested_size_pct=abs(sizing_result.delta_pct),
@@ -583,6 +627,12 @@ class DecisionAgent:
             status="pending",
             decision_source="llm",
         )
+
+        # Cache HOLD decisions to avoid redundant LLM calls when market is stable
+        if final_action == "HOLD":
+            cache.put(cache_key, decision)
+
+        return decision
 
     def _format_decision_history(self) -> str:
         """Format recent decision history for LLM context.
@@ -625,7 +675,6 @@ class DecisionAgent:
     def _decide_rule_based(
         self,
         market: dict,
-        news: dict | None,
         indicators: dict,
         portfolio: dict | None,
         risk: dict,
@@ -639,7 +688,6 @@ class DecisionAgent:
 
         Args:
             market: Market data.
-            news: News context.
             indicators: Indicator signals.
             portfolio: Portfolio state.
             risk: Risk state.
@@ -652,7 +700,6 @@ class DecisionAgent:
         trend = indicators.get("trend", "neutral")
         momentum = indicators.get("momentum", "neutral")
         rsi = indicators.get("signals", {}).get("rsi", 50)
-        sentiment = news.get("sentiment", 0) if news else 0
         price_change_24h = market.get("percent_change_24h", 0)
 
         # Get current position
@@ -661,7 +708,7 @@ class DecisionAgent:
         # Count signals to determine direction and confidence
         bullish_signals = 0
         bearish_signals = 0
-        max_signals = 7  # Maximum possible signals
+        max_signals = 6  # Maximum possible signals
 
         # Technical signals
         if trend == "bullish":
@@ -677,12 +724,6 @@ class DecisionAgent:
         if rsi < 30:
             bullish_signals += 1
         elif rsi > 70:
-            bearish_signals += 1
-
-        # Sentiment signal
-        if sentiment > 0.3:
-            bullish_signals += 1
-        elif sentiment < -0.3:
             bearish_signals += 1
 
         # Derivatives signals (contrarian approach)
@@ -778,29 +819,6 @@ class DecisionAgent:
             status="pending",
             decision_source="rule_based",
         )
-
-    def _calculate_size(self, confidence: float, indicators: dict) -> float:
-        """Calculate suggested position size.
-
-        Args:
-            confidence: Decision confidence.
-            indicators: Indicator signals.
-
-        Returns:
-            Suggested size as percentage.
-        """
-        # Base size based on confidence
-        base_size = confidence * 10  # Max 10% per trade
-
-        # Reduce in high volatility
-        volatility = indicators.get("volatility", "medium")
-        if volatility == "high":
-            base_size *= 0.5
-        elif volatility == "low":
-            base_size *= 1.2
-
-        return min(10.0, max(0.0, base_size))
-
 
 def decision_agent_node(state: TradingState) -> dict:
     """LangGraph node function for decision agent.

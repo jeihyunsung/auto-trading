@@ -5,8 +5,7 @@ import asyncio
 import logging
 import sys
 import time
-from datetime import datetime, timedelta
-from pathlib import Path
+from datetime import datetime
 
 from trading.adapters.upbit import get_broker
 from trading.agents.decision_agent import set_hysteresis_manager
@@ -17,18 +16,15 @@ from trading.core.hysteresis import HysteresisConfig, HysteresisManager
 from trading.core.indicator_history import IndicatorHistoryWriter, set_indicator_writer
 from trading.core.isolated_balance import (
     IsolatedBalanceTracker,
-    get_isolated_tracker,
     set_isolated_tracker,
 )
-from trading.core.news_memory import NewsMemory, NewsMemoryConfig, set_news_memory
 from trading.core.performance import (
     PerformanceConfig,
     PerformanceTracker,
-    get_performance_tracker,
     set_performance_tracker,
 )
 from trading.core.state import create_initial_state
-from trading.graph.builder import simple_pipeline, trading_graph
+from trading.graph.builder import simple_pipeline
 
 # Configure logging
 logging.basicConfig(
@@ -41,11 +37,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def run_single_cycle(use_supervisor: bool = True) -> dict:
+def run_single_cycle() -> dict:
     """Run a single trading cycle.
-
-    Args:
-        use_supervisor: Use supervisor graph (True) or simple pipeline (False).
 
     Returns:
         Final state after cycle completion.
@@ -57,12 +50,9 @@ def run_single_cycle(use_supervisor: bool = True) -> dict:
     # Create initial state
     state = create_initial_state()
 
-    # Select graph
-    graph = trading_graph if use_supervisor else simple_pipeline
-
     # Run graph
     try:
-        final_state = graph.invoke(state)
+        final_state = simple_pipeline.invoke(state)
 
         # Log results
         decision = final_state.get("decision")
@@ -89,22 +79,21 @@ def run_single_cycle(use_supervisor: bool = True) -> dict:
 
 
 def run_continuous(
-    interval_seconds: int = 300,
-    use_supervisor: bool = True,
+    interval_seconds: int = 600,
     max_cycles: int | None = None,
     hysteresis_config: HysteresisConfig | None = None,
-    news_memory_enabled: bool = True,
     performance_tracking: bool = True,
+    reset_isolated: bool = False,
 ) -> None:
     """Run trading bot continuously.
 
     Args:
-        interval_seconds: Seconds between cycles (default 5 minutes).
-        use_supervisor: Use supervisor graph.
+        interval_seconds: Seconds between cycles (default 10 minutes).
         max_cycles: Maximum cycles to run (None for infinite).
         hysteresis_config: Optional hysteresis configuration. None to disable.
-        news_memory_enabled: Enable news memory system.
         performance_tracking: Enable performance tracking.
+        reset_isolated: If True and isolated mode is on, wipe the persisted
+            balance back to the configured initial capital before running.
     """
     settings = get_settings()
 
@@ -113,17 +102,6 @@ def run_continuous(
     if hysteresis_config is not None:
         hysteresis = HysteresisManager(hysteresis_config)
         set_hysteresis_manager(hysteresis)
-
-    # Initialize news memory
-    news_memory: NewsMemory | None = None
-    if news_memory_enabled and settings.news_memory_enabled:
-        news_memory = NewsMemory(
-            NewsMemoryConfig(
-                ttl=timedelta(hours=settings.news_memory_ttl_hours),
-                decay_half_life=timedelta(hours=settings.news_decay_half_life_hours),
-            )
-        )
-        set_news_memory(news_memory)
 
     # Initialize performance tracker (uses shared broker)
     tracker: PerformanceTracker | None = None
@@ -144,6 +122,15 @@ def run_continuous(
             initial_capital_krw=settings.isolated_capital_krw,
             state_file=settings.log_dir / "isolated_balance.json",
         )
+        if reset_isolated:
+            from decimal import Decimal
+            isolated_tracker.reset(Decimal(str(settings.isolated_capital_krw)))
+            logger.info("Isolated balance reset by --reset-isolated flag")
+        else:
+            # Persisted state may have been created with a different initial
+            # capital. Honor the current setting so capital changes are not
+            # silently ignored on restart.
+            isolated_tracker.adjust_capital(settings.isolated_capital_krw)
         set_isolated_tracker(isolated_tracker)
 
     # Initialize history writers for dashboard
@@ -167,13 +154,6 @@ def run_continuous(
         )
     else:
         logger.info("Hysteresis: disabled")
-    if news_memory:
-        logger.info(
-            f"News memory: enabled (ttl={settings.news_memory_ttl_hours}h, "
-            f"decay={settings.news_decay_half_life_hours}h)"
-        )
-    else:
-        logger.info("News memory: disabled")
     if tracker:
         logger.info("Performance tracking: enabled")
     else:
@@ -203,7 +183,7 @@ def run_continuous(
             logger.info(f"{'='*60}\n")
 
             start_time = time.time()
-            final_state = run_single_cycle(use_supervisor)
+            final_state = run_single_cycle()
 
             # Record portfolio snapshot for performance tracking
             if tracker and broker:
@@ -234,8 +214,6 @@ def run_continuous(
             if cycle_count % 10 == 0:
                 if hysteresis:
                     logger.info(f"Hysteresis stats: {hysteresis.stats.to_dict()}")
-                if news_memory:
-                    logger.info(f"News memory stats: {news_memory.get_stats()}")
                 if tracker:
                     logger.info(f"Performance: {tracker.get_summary()}")
 
@@ -259,8 +237,6 @@ def run_continuous(
         # Log final stats and cleanup
         if hysteresis:
             logger.info(f"Final hysteresis stats: {hysteresis.stats.to_dict()}")
-        if news_memory:
-            logger.info(f"Final news memory stats: {news_memory.get_stats()}")
 
         # Generate performance report
         if tracker:
@@ -274,7 +250,6 @@ def run_continuous(
             logger.info(f"Final isolated balance: {isolated_tracker.get_stats()}")
 
         set_hysteresis_manager(None)
-        set_news_memory(None)
         set_performance_tracker(None)
         set_isolated_tracker(None)
         set_decision_writer(None)
@@ -324,19 +299,16 @@ def main():
     parser.add_argument(
         "--interval",
         type=int,
-        default=300,
-        help="Interval between cycles in seconds (default: 300)",
+        default=600,
+        help="Interval between cycles in seconds (default: 600 = 10min). "
+             "Shorter intervals add HTTP/LLM load with diminishing signal value "
+             "since rapid_movement / streaming triggers already cover sub-minute swings.",
     )
     parser.add_argument(
         "--max-cycles",
         type=int,
         default=None,
         help="Maximum number of cycles (default: unlimited)",
-    )
-    parser.add_argument(
-        "--simple",
-        action="store_true",
-        help="Use simple pipeline instead of supervisor graph",
     )
     parser.add_argument(
         "--validate-only",
@@ -366,14 +338,10 @@ def main():
         help="Confidence delta required for BUY<->SELL reversal (default: 0.35)",
     )
     parser.add_argument(
-        "--no-news-memory",
+        "--reset-isolated",
         action="store_true",
-        help="Disable news memory system",
-    )
-    parser.add_argument(
-        "--no-news-filter",
-        action="store_true",
-        help="Disable news event filtering",
+        help="Reset isolated balance to initial capital (clears bot holdings). "
+             "Requires ISOLATED_MODE=true.",
     )
     parser.add_argument(
         "--no-performance",
@@ -398,14 +366,25 @@ def main():
             action_reversal_delta=args.hysteresis_reversal_delta,
         )
 
-    # Check for streaming mode
-    news_memory_enabled = not args.no_news_memory
-
     if args.streaming:
         logger.info("Starting in event-driven streaming mode...")
-        from trading.main_async import run_bot
+        from trading.main_async import _get_hysteresis_config, run_bot
 
         settings = get_settings()
+
+        # Streaming mode requires its own hysteresis tuning (shorter cooldowns,
+        # lower thresholds). Override the polling-default config with the
+        # preset selected via settings.hysteresis_mode unless --no-hysteresis.
+        streaming_hysteresis = (
+            _get_hysteresis_config(settings.hysteresis_enabled, settings.hysteresis_mode)
+            if not args.no_hysteresis
+            else None
+        )
+        if streaming_hysteresis is not None:
+            logger.info(
+                f"Streaming hysteresis preset: {settings.hysteresis_mode} "
+                f"(reversal_delta={streaming_hysteresis.action_reversal_delta})"
+            )
 
         # Initialize isolated balance tracker if enabled (IMPORTANT: must be before run_bot)
         if settings.isolated_mode:
@@ -413,6 +392,13 @@ def main():
                 initial_capital_krw=settings.isolated_capital_krw,
                 state_file=settings.log_dir / "isolated_balance.json",
             )
+            if args.reset_isolated:
+                from decimal import Decimal
+                isolated_tracker.reset(Decimal(str(settings.isolated_capital_krw)))
+                logger.info("Isolated balance reset by --reset-isolated flag")
+            else:
+                # Honor current setting over persisted state (capital may have changed).
+                isolated_tracker.adjust_capital(settings.isolated_capital_krw)
             set_isolated_tracker(isolated_tracker)
             logger.info(
                 f"Isolated mode: enabled (capital={settings.isolated_capital_krw:,.0f} KRW)"
@@ -423,8 +409,7 @@ def main():
                 symbols=settings.streaming_symbols,
                 cooldown_seconds=args.cooldown,
                 batch_window_seconds=settings.event_batch_window_seconds,
-                hysteresis_config=hysteresis_config,
-                news_memory_enabled=news_memory_enabled,
+                hysteresis_config=streaming_hysteresis,
                 performance_tracking=not args.no_performance,
             )
         )
@@ -433,33 +418,20 @@ def main():
     # Run polling mode
 
     if args.mode == "single":
-        # For single mode, optionally apply hysteresis and news memory
-        settings = get_settings()
         if hysteresis_config is not None:
             hysteresis = HysteresisManager(hysteresis_config)
             set_hysteresis_manager(hysteresis)
-        news_memory: NewsMemory | None = None
-        if news_memory_enabled and settings.news_memory_enabled:
-            news_memory = NewsMemory(
-                NewsMemoryConfig(
-                    ttl=timedelta(hours=settings.news_memory_ttl_hours),
-                    decay_half_life=timedelta(hours=settings.news_decay_half_life_hours),
-                )
-            )
-            set_news_memory(news_memory)
         try:
-            run_single_cycle(use_supervisor=not args.simple)
+            run_single_cycle()
         finally:
             set_hysteresis_manager(None)
-            set_news_memory(None)
     else:
         run_continuous(
             interval_seconds=args.interval,
-            use_supervisor=not args.simple,
             max_cycles=args.max_cycles,
             hysteresis_config=hysteresis_config,
-            news_memory_enabled=news_memory_enabled,
             performance_tracking=not args.no_performance,
+            reset_isolated=args.reset_isolated,
         )
 
 

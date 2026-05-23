@@ -2,14 +2,12 @@
 
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
-# Korea Standard Time (UTC+9)
-KST = timezone(timedelta(hours=9))
-
 from trading.adapters.upbit import UpbitBrokerAdapter, get_broker
+from trading.core.time import KST
 from trading.core.isolated_balance import get_isolated_tracker
 from trading.core.models import OrderRequest, OrderResult, OrderSide, OrderStatus
 from trading.core.performance import get_performance_tracker
@@ -77,10 +75,15 @@ class ExecutionAgent:
         # Check if isolated mode is enabled
         isolated_tracker = get_isolated_tracker()
 
-        # Get balances
-        balances = self.broker.get_all_balances()
-        krw = balances.get("KRW", Decimal("0"))
-        btc = balances.get("BTC", Decimal("0"))
+        # In isolated mode, the broker balance is irrelevant for sizing —
+        # we use the tracker's virtual balance instead. Skip the API call.
+        if isolated_tracker is None:
+            balances = self.broker.get_all_balances()
+            krw = balances.get("KRW", Decimal("0"))
+            btc = balances.get("BTC", Decimal("0"))
+        else:
+            krw = Decimal("0")
+            btc = Decimal("0")
 
         # Build order request
         symbol = "KRW-BTC"
@@ -204,8 +207,13 @@ class ExecutionAgent:
         # Log trade
         self._log_trade(decision, request, result)
 
-        # Record to isolated tracker if successful
-        if isolated_tracker is not None and result.status == OrderStatus.FILLED:
+        # Record to isolated tracker for any partial-or-full fill. Skipping
+        # PARTIALLY_FILLED would leak the actual Upbit-side balance change.
+        if (
+            isolated_tracker is not None
+            and result.filled_quantity > 0
+            and result.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED)
+        ):
             self._record_to_isolated_tracker(action, result, isolated_tracker)
 
         return result
@@ -223,26 +231,49 @@ class ExecutionAgent:
             result: Executed order result.
             tracker: IsolatedBalanceTracker instance.
         """
-        avg_price = result.average_price or Decimal("0")
+        # Guard: missing average_price would create a zero-cost-basis entry
+        # that permanently breaks P&L tracking. Skip and alert instead.
+        if result.average_price is None or result.average_price <= 0:
+            logger.error(
+                f"Isolated tracker NOT updated: {action} result has no "
+                f"average_price (order_id={result.order_id}, "
+                f"filled_qty={result.filled_quantity}). "
+                f"Tracker now diverges from real exchange balance — investigate."
+            )
+            return
+
+        avg_price = result.average_price
         filled_qty = result.filled_quantity
         fee = result.fee
 
         if action == "BUY":
             # KRW spent = qty * price (fee is separate)
             krw_spent = filled_qty * avg_price
-            tracker.record_buy(
+            ok = tracker.record_buy(
                 krw_spent=krw_spent,
                 btc_received=filled_qty,
                 fee_krw=fee,
             )
+            if not ok:
+                logger.error(
+                    f"Isolated tracker BUY record FAILED (insufficient tracker KRW). "
+                    f"Real Upbit balance changed but tracker diverges. "
+                    f"krw_spent={krw_spent}, btc_received={filled_qty}, fee={fee}"
+                )
         elif action == "SELL":
             # KRW received = (qty * price) - fee
             krw_received = (filled_qty * avg_price) - fee
-            tracker.record_sell(
+            ok = tracker.record_sell(
                 btc_sold=filled_qty,
                 krw_received=krw_received,
                 fee_krw=fee,
             )
+            if not ok:
+                logger.error(
+                    f"Isolated tracker SELL record FAILED (insufficient tracker BTC). "
+                    f"Real Upbit balance changed but tracker diverges. "
+                    f"btc_sold={filled_qty}, krw_received={krw_received}, fee={fee}"
+                )
 
     def _log_trade(
         self,

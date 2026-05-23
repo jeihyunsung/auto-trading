@@ -26,8 +26,7 @@ def test_invoke_json_extracts_first_valid_object_after_schema_like_output():
 {
   "action": "HOLD",
   "confidence": 0.62,
-  "rationale": "RSI=48.2, Trend=neutral, Funding=0.0001%로 방향성 부족하여 관망.",
-  "key_factors": ["중립 추세", "낮은 확신", "포지션 유지"]
+  "rationale": "RSI=48.2, Trend=neutral, Funding=0.0001%로 방향성 부족하여 관망."
 }"""
     client = _make_client(response)
 
@@ -42,8 +41,7 @@ def test_invoke_json_handles_extra_text_after_valid_json():
 {
   "action": "SELL",
   "confidence": 0.81,
-  "rationale": "RSI=72.4, Trend=bearish, OI 증가와 롱 과열로 차익실현 우세.",
-  "key_factors": ["과매수", "약세 추세", "롱 과열"]
+  "rationale": "RSI=72.4, Trend=bearish, OI 증가와 롱 과열로 차익실현 우세."
 }
 ```
 

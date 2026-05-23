@@ -1,15 +1,13 @@
 """Technical indicator calculation agent."""
 
 import logging
-from datetime import datetime, timedelta, timezone
-
-# Korea Standard Time (UTC+9)
-KST = timezone(timedelta(hours=9))
+from datetime import datetime
 
 from trading.config import get_settings
+from trading.core.time import KST
 from trading.core.indicator_history import IndicatorSnapshot, get_indicator_writer
 from trading.core.models import OHLCV
-from trading.core.state import IndicatorSignals, TradingState
+from trading.core.state import IndicatorSignals, TrendChannelData, TradingState
 from trading.indicators.momentum import (
     calculate_obv,
     calculate_obv_change_pct,
@@ -17,6 +15,7 @@ from trading.indicators.momentum import (
     get_momentum_signal,
 )
 from trading.indicators.trend import calculate_macd, get_trend_signal
+from trading.indicators.trend_channel import calculate_trend_channel
 from trading.indicators.volatility import calculate_bollinger_bands, get_volatility_level
 
 logger = logging.getLogger(__name__)
@@ -141,6 +140,45 @@ def indicator_agent_node(state: TradingState) -> dict:
         ohlcv_data = market.get("ohlcv", [])
         indicators = agent.calculate(ohlcv_data)
 
+        # Calculate trend channel (no LLM cost)
+        trend_channel_data: TrendChannelData | None = None
+        try:
+            ohlcv_objects = [
+                OHLCV(
+                    timestamp=datetime.fromisoformat(c["timestamp"])
+                    if isinstance(c["timestamp"], str)
+                    else c["timestamp"],
+                    open=c["open"],
+                    high=c["high"],
+                    low=c["low"],
+                    close=c["close"],
+                    volume=c["volume"],
+                )
+                for c in ohlcv_data
+            ]
+            channel = calculate_trend_channel(ohlcv_objects)
+            if channel:
+                trend_channel_data = TrendChannelData(
+                    slope=channel.slope,
+                    slope_angle_deg=channel.slope_angle_deg,
+                    channel_width_pct=channel.channel_width_pct,
+                    position_in_channel=channel.position_in_channel,
+                    breakout_risk=channel.breakout_risk,
+                    support_levels=channel.support_levels,
+                    resistance_levels=channel.resistance_levels,
+                    r_squared=channel.r_squared,
+                    upper_band=channel.upper_band,
+                    lower_band=channel.lower_band,
+                    midline=channel.midline,
+                )
+                logger.info(
+                    f"Trend channel: slope={channel.slope_angle_deg:.1f}°, "
+                    f"position={channel.position_in_channel:.0%}, "
+                    f"breakout_risk={channel.breakout_risk}"
+                )
+        except Exception as e:
+            logger.warning(f"Trend channel calculation failed: {e}")
+
         # Record indicator snapshot for dashboard
         writer = get_indicator_writer()
         if writer:
@@ -166,6 +204,7 @@ def indicator_agent_node(state: TradingState) -> dict:
 
         return {
             "indicators": indicators,
+            "trend_channel": trend_channel_data,
             "error": None,
             "last_updated": datetime.now(KST).isoformat(),
         }
@@ -174,6 +213,7 @@ def indicator_agent_node(state: TradingState) -> dict:
         logger.error(f"Indicator agent failed: {e}")
         return {
             "indicators": agent._empty_signals(),
+            "trend_channel": None,
             "error": f"Indicator agent error: {e}",
             "last_updated": datetime.now(KST).isoformat(),
         }

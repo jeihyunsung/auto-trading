@@ -2,6 +2,7 @@
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -18,6 +19,7 @@ class RiskLimits:
     max_position_pct: float = 50.0
     min_order_krw: float = 5000.0
     max_single_trade_pct: float = 10.0  # Max % of portfolio per trade
+    max_trades_per_day: int = 20  # Max BUY trades per day. SELL is always allowed.
 
     @classmethod
     def from_settings(cls) -> "RiskLimits":
@@ -27,6 +29,7 @@ class RiskLimits:
             max_daily_loss_pct=settings.max_daily_loss_pct,
             max_position_pct=settings.max_position_pct,
             min_order_krw=settings.min_order_krw,
+            max_trades_per_day=settings.max_trades_per_day,
         )
 
 
@@ -79,6 +82,66 @@ class RiskManager:
         """Deactivate kill switch."""
         self._kill_switch = False
         logger.info("Kill switch deactivated")
+
+    def get_buy_count_today(self, when: datetime | None = None) -> int:
+        """Return executed BUY count for the given day (default: today).
+
+        Reads from the trade log JSONL (logs/trades_YYYYMMDD.jsonl) so the
+        count survives process restarts and works across separately-created
+        RiskManager instances (RiskAgent re-instantiates per cycle).
+        """
+        import json
+
+        day = (when or datetime.now()).date()
+        settings = get_settings()
+        log_file = settings.log_dir / f"trades_{day.strftime('%Y%m%d')}.jsonl"
+        if not log_file.exists():
+            return 0
+        count = 0
+        try:
+            with open(log_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    entry = json.loads(line)
+                    decision = entry.get("decision") or {}
+                    result = entry.get("result") or {}
+                    # Count only successfully filled BUY orders. Rejected /
+                    # failed orders do not consume the daily quota.
+                    if decision.get("action") == "BUY" and result.get("status") == "filled":
+                        count += 1
+        except (OSError, json.JSONDecodeError) as e:
+            logger.warning(f"Failed to read trade log for daily cap: {e}")
+            return 0
+        return count
+
+    def check_daily_trade_cap(
+        self,
+        action: Literal["BUY", "SELL", "HOLD"],
+        when: datetime | None = None,
+    ) -> tuple[bool, str]:
+        """Check if daily BUY cap has been reached.
+
+        SELL is always allowed (stop-loss exemption) — passing SELL or HOLD
+        always returns OK. Only BUY is rate-limited per day.
+
+        Args:
+            action: Proposed action.
+            when: Timestamp (defaults to now).
+
+        Returns:
+            Tuple of (is_ok, message).
+        """
+        if action != "BUY":
+            return True, "Non-BUY action exempt from daily trade cap"
+        count = self.get_buy_count_today(when)
+        if count >= self.limits.max_trades_per_day:
+            return (
+                False,
+                f"Daily BUY cap reached: {count}/{self.limits.max_trades_per_day}",
+            )
+        return True, f"Daily BUY count: {count}/{self.limits.max_trades_per_day}"
 
     def check_daily_loss_limit(self, portfolio: PortfolioState) -> tuple[bool, str]:
         """Check if daily loss limit is breached.
@@ -197,6 +260,11 @@ class RiskManager:
 
         # Check daily loss
         ok, msg = self.check_daily_loss_limit(portfolio)
+        if not ok:
+            issues.append(msg)
+
+        # Check daily BUY cap (SELL is always exempt for stop-loss safety)
+        ok, msg = self.check_daily_trade_cap(action)
         if not ok:
             issues.append(msg)
 

@@ -4,16 +4,26 @@ This module provides balance tracking that is isolated from the user's
 existing holdings, allowing the bot to operate with a dedicated budget.
 """
 
+import atexit
+import errno
+import fcntl
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
 from trading.config import get_settings
+from trading.core.time import KST
 
 logger = logging.getLogger(__name__)
+
+
+def _now_kst_iso() -> str:
+    """Return current KST timestamp in ISO 8601 format."""
+    return datetime.now(KST).isoformat()
 
 
 @dataclass
@@ -26,8 +36,10 @@ class IsolatedBalance:
         initial_capital: Starting capital in KRW.
         total_invested: Total KRW invested in BTC.
         total_fees: Total fees paid.
-        created_at: When isolated tracking started.
-        last_updated: Last update timestamp.
+        created_at: When isolated tracking started (KST).
+        last_updated: Last update timestamp (KST).
+        daily_start_value: Total portfolio value (KRW) at start of today (KST).
+        daily_start_date: Date string (YYYY-MM-DD) for daily rebase.
     """
 
     krw: Decimal
@@ -35,8 +47,10 @@ class IsolatedBalance:
     initial_capital: Decimal
     total_invested: Decimal = Decimal("0")
     total_fees: Decimal = Decimal("0")
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    last_updated: str = field(default_factory=lambda: datetime.now().isoformat())
+    created_at: str = field(default_factory=_now_kst_iso)
+    last_updated: str = field(default_factory=_now_kst_iso)
+    daily_start_value: Decimal = Decimal("0")  # 0 means "not yet seeded"
+    daily_start_date: str = ""
 
     def to_dict(self) -> dict:
         """Convert to dictionary for serialization."""
@@ -48,6 +62,8 @@ class IsolatedBalance:
             "total_fees": str(self.total_fees),
             "created_at": self.created_at,
             "last_updated": self.last_updated,
+            "daily_start_value": str(self.daily_start_value),
+            "daily_start_date": self.daily_start_date,
         }
 
     @classmethod
@@ -59,8 +75,10 @@ class IsolatedBalance:
             initial_capital=Decimal(data["initial_capital"]),
             total_invested=Decimal(data.get("total_invested", "0")),
             total_fees=Decimal(data.get("total_fees", "0")),
-            created_at=data.get("created_at", datetime.now().isoformat()),
-            last_updated=data.get("last_updated", datetime.now().isoformat()),
+            created_at=data.get("created_at", _now_kst_iso()),
+            last_updated=data.get("last_updated", _now_kst_iso()),
+            daily_start_value=Decimal(data.get("daily_start_value", "0")),
+            daily_start_date=data.get("daily_start_date", ""),
         )
 
 
@@ -81,6 +99,11 @@ class IsolatedBalanceTracker:
         Args:
             initial_capital_krw: Starting capital (uses config if None).
             state_file: File to persist state (uses default if None).
+
+        Raises:
+            RuntimeError: If another process already holds the tracker lock
+                for the same state file. Prevents two bot instances from
+                corrupting the shared balance JSON.
         """
         settings = get_settings()
         self._initial_capital = Decimal(
@@ -88,9 +111,56 @@ class IsolatedBalanceTracker:
         )
         self._state_file = state_file or settings.log_dir / "isolated_balance.json"
         self._balance: IsolatedBalance | None = None
+        self._lock_file = None  # Held for tracker lifetime
+
+        # Acquire exclusive single-instance lock BEFORE loading state.
+        # Releases automatically on process exit via atexit.
+        self._acquire_instance_lock()
 
         # Load or create initial state
         self._load_or_create()
+
+    def _acquire_instance_lock(self) -> None:
+        """Acquire an OS-level exclusive lock to prevent dual-process corruption.
+
+        Uses fcntl.flock on a sibling .lock file. Raises RuntimeError if
+        another process already holds the lock so the operator sees the
+        conflict instead of having two bots silently fight over the JSON.
+        """
+        lock_path = self._state_file.with_suffix(self._state_file.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        # Open the lock file (kept open for the tracker's lifetime).
+        try:
+            fp = open(lock_path, "w")
+            fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            if e.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
+                raise RuntimeError(
+                    f"Another bot instance is holding {lock_path}. "
+                    f"Refusing to start to prevent isolated_balance.json corruption. "
+                    f"If this is stale, remove the .lock file manually."
+                ) from None
+            raise
+        fp.write(f"{os.getpid()}\n")
+        fp.flush()
+        self._lock_file = fp
+        atexit.register(self._release_instance_lock)
+
+    def _release_instance_lock(self) -> None:
+        """Release the instance lock and remove the lock file."""
+        if self._lock_file is None:
+            return
+        try:
+            fcntl.flock(self._lock_file.fileno(), fcntl.LOCK_UN)
+            self._lock_file.close()
+            lock_path = self._state_file.with_suffix(self._state_file.suffix + ".lock")
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+        except Exception as e:
+            logger.warning(f"Lock release error (ignoring): {e}")
+        self._lock_file = None
 
     def _load_or_create(self) -> None:
         """Load existing state or create new one."""
@@ -117,15 +187,25 @@ class IsolatedBalanceTracker:
         logger.info(f"Created new isolated balance with {self._initial_capital:,.0f} KRW")
 
     def _save(self) -> None:
-        """Persist state to file."""
+        """Persist state to file atomically.
+
+        Writes to a temp sibling then os.replace() — POSIX-atomic rename
+        guarantees readers never see a half-written file even if the
+        process is killed mid-write. Prevents JSON corruption / silent
+        balance loss on crash or concurrent updates.
+        """
         if self._balance is None:
             return
 
-        self._balance.last_updated = datetime.now().isoformat()
+        self._balance.last_updated = _now_kst_iso()
         self._state_file.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(self._state_file, "w") as f:
+        tmp_path = self._state_file.with_suffix(self._state_file.suffix + ".tmp")
+        with open(tmp_path, "w") as f:
             json.dump(self._balance.to_dict(), f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, self._state_file)
 
     @property
     def balance(self) -> IsolatedBalance:
@@ -229,6 +309,22 @@ class IsolatedBalanceTracker:
         )
         return True
 
+    def _rebase_daily_if_needed(self, total_value: Decimal) -> None:
+        """Reset daily_start_value at KST midnight.
+
+        Called from get_portfolio_value whenever a new KST day starts so
+        that daily P&L tracks today-only change instead of cumulative.
+        Persists across restarts via daily_start_date in the state file.
+        """
+        today = datetime.now(KST).strftime("%Y-%m-%d")
+        if self._balance.daily_start_date != today:
+            self._balance.daily_start_date = today
+            self._balance.daily_start_value = total_value
+            self._save()
+            logger.info(
+                f"Daily P&L rebased for {today}: start_value={total_value:,.0f} KRW"
+            )
+
     def get_portfolio_value(self, btc_price: float) -> dict:
         """Calculate current portfolio value.
 
@@ -242,6 +338,16 @@ class IsolatedBalanceTracker:
         total_value = float(self.balance.krw) + btc_value
         initial = float(self.balance.initial_capital)
         total_invested = float(self.balance.total_invested)
+
+        # Daily P&L (rebased at KST midnight) — used by RiskAgent for the
+        # daily loss limit. Without this, cumulative pnl would falsely
+        # trigger the limit on long-running bots.
+        self._rebase_daily_if_needed(Decimal(str(total_value)))
+        daily_start = float(self._balance.daily_start_value)
+        if daily_start > 0:
+            daily_pnl_pct = ((total_value / daily_start) - 1) * 100
+        else:
+            daily_pnl_pct = 0.0
 
         # Unrealized P&L: BTC position only (current value vs invested amount)
         # This measures gain/loss on the BTC you hold, not including cash
@@ -259,6 +365,7 @@ class IsolatedBalanceTracker:
             "total_invested_krw": total_invested,
             "pnl_krw": total_value - initial,
             "pnl_pct": ((total_value / initial) - 1) * 100 if initial > 0 else 0,
+            "daily_pnl_pct": daily_pnl_pct,
             "unrealized_pnl_pct": unrealized_pnl_pct,
             "exposure_pct": (btc_value / total_value * 100) if total_value > 0 else 0,
             "total_fees_krw": float(self.balance.total_fees),

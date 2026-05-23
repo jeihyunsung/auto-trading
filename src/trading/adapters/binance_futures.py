@@ -141,6 +141,131 @@ class BinanceFuturesDataProvider:
         data = resp.json()
         return data[0] if data else {}
 
+    def get_historical_oi(
+        self,
+        start_ms: int,
+        end_ms: int,
+        period: str = "1h",
+    ) -> list[dict]:
+        """Fetch open interest history for a time window.
+
+        Args:
+            start_ms: Window start (epoch ms).
+            end_ms: Window end (epoch ms).
+            period: Candle period (5m/15m/30m/1h/2h/4h/6h/12h/1d).
+
+        Returns:
+            List of records: [{"sumOpenInterest", "sumOpenInterestValue", "timestamp"}, ...]
+        """
+        return self._fetch_paginated(
+            f"{BASE_URL}/futures/data/openInterestHist",
+            start_ms,
+            end_ms,
+            period,
+        )
+
+    def get_historical_long_short(
+        self,
+        start_ms: int,
+        end_ms: int,
+        period: str = "1h",
+    ) -> list[dict]:
+        """Fetch global long/short account ratio history.
+
+        Returns:
+            List of {"longShortRatio", "longAccount", "shortAccount", "timestamp"}.
+        """
+        return self._fetch_paginated(
+            f"{BASE_URL}/futures/data/globalLongShortAccountRatio",
+            start_ms,
+            end_ms,
+            period,
+        )
+
+    def get_historical_top_trader(
+        self,
+        start_ms: int,
+        end_ms: int,
+        period: str = "1h",
+    ) -> list[dict]:
+        """Fetch top trader long/short position ratio history."""
+        return self._fetch_paginated(
+            f"{BASE_URL}/futures/data/topLongShortPositionRatio",
+            start_ms,
+            end_ms,
+            period,
+        )
+
+    def get_historical_funding(
+        self,
+        start_ms: int,
+        end_ms: int,
+    ) -> list[dict]:
+        """Fetch funding rate history (Binance posts every 8h).
+
+        Returns:
+            List of {"fundingRate", "fundingTime", ...}.
+        """
+        all_records: list[dict] = []
+        cursor = start_ms
+        while cursor < end_ms:
+            BINANCE_RATE_LIMITER.acquire()
+            resp = self._session.get(
+                f"{BASE_URL}/fapi/v1/fundingRate",
+                params={
+                    "symbol": self.symbol,
+                    "startTime": cursor,
+                    "endTime": end_ms,
+                    "limit": 1000,
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            all_records.extend(batch)
+            last_ts = int(batch[-1].get("fundingTime", cursor))
+            if last_ts <= cursor or len(batch) < 1000:
+                break
+            cursor = last_ts + 1
+        return all_records
+
+    def _fetch_paginated(
+        self,
+        url: str,
+        start_ms: int,
+        end_ms: int,
+        period: str,
+    ) -> list[dict]:
+        """Paginate /futures/data/* endpoints (max 500 per call)."""
+        all_records: list[dict] = []
+        cursor = start_ms
+        while cursor < end_ms:
+            BINANCE_RATE_LIMITER.acquire()
+            resp = self._session.get(
+                url,
+                params={
+                    "symbol": self.symbol,
+                    "period": period,
+                    "startTime": cursor,
+                    "endTime": end_ms,
+                    "limit": 500,
+                },
+                timeout=10,
+            )
+            resp.raise_for_status()
+            batch = resp.json()
+            if not batch:
+                break
+            all_records.extend(batch)
+            # Records have "timestamp" (ms). Advance past the last one.
+            last_ts = int(batch[-1].get("timestamp", cursor))
+            if last_ts <= cursor or len(batch) < 500:
+                break
+            cursor = last_ts + 1
+        return all_records
+
     def get_mark_price(self) -> dict:
         """Get mark price and funding rate info.
 

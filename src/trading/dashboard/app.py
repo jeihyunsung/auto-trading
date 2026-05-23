@@ -1,14 +1,12 @@
 """Streamlit dashboard for trading bot monitoring."""
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
 
-# Korea Standard Time (UTC+9)
-KST = timezone(timedelta(hours=9))
-
 from trading.core.history_reader import HistoryReader
+from trading.core.time import KST
 from trading.dashboard.charts import (
     create_bollinger_bands_chart,
     create_combined_chart,

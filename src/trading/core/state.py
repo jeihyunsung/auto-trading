@@ -19,58 +19,30 @@ class MarketData(TypedDict):
     percent_change_24h: float
 
 
-class NewsItem(TypedDict):
-    """Single news item."""
+class PatternAnalysis(TypedDict, total=False):
+    """Chart pattern analysis result."""
 
-    title: str
-    source: str
-    published: str | None  # ISO timestamp
-
-
-class MemorizedNewsItem(TypedDict):
-    """News item stored in memory with metadata.
-
-    Includes classification and tracking info for the news memory system.
-    """
-
-    title: str
-    source: str
-    published: str | None  # ISO timestamp
-    collected_at: str  # ISO timestamp when collected
-    event_type: str  # EventType value (breaking, regulatory, etc.)
-    is_actionable: bool  # True for events, False for analysis/opinion
-    content_hash: str  # For duplicate detection
-    initial_sentiment: float  # Sentiment at collection time
-    initial_impact: str  # Impact level at collection time
+    pattern: str  # Pattern name (e.g., "double_bottom", "none")
+    confidence: float  # 0.0-1.0
+    direction: Literal["bullish", "bearish", "neutral"]
+    description: str  # Korean description
+    source: Literal["vision", "rule_based"]  # How pattern was detected
 
 
-class NewsMemoryStats(TypedDict, total=False):
-    """Statistics about news memory state."""
+class TrendChannelData(TypedDict, total=False):
+    """Trend channel analysis data."""
 
-    total_items: int
-    actionable_items: int
-    oldest_age_hours: float
-    newest_age_hours: float
-    items_by_type: dict[str, int]
-    duplicates_blocked: int
-
-
-class NewsContext(TypedDict, total=False):
-    """News analysis context.
-
-    Required fields for backward compatibility, optional fields for memory system.
-    """
-
-    # Required (backward compatible)
-    headlines: list[str]
-    articles: list[NewsItem]  # Current cycle articles
-    sentiment: float  # -1.0 to 1.0 (weighted by time decay if memory enabled)
-    impact: Literal["low", "medium", "high"]
-    summary: str
-
-    # Optional (memory system)
-    memorized_articles: list[MemorizedNewsItem]  # All articles in memory
-    memory_stats: NewsMemoryStats  # Memory statistics
+    slope: float  # Positive = uptrend
+    slope_angle_deg: float
+    channel_width_pct: float  # Channel width as % of price
+    position_in_channel: float  # 0.0 = lower, 1.0 = upper
+    breakout_risk: Literal["high", "medium", "low"]
+    support_levels: list[float]
+    resistance_levels: list[float]
+    r_squared: float  # Regression fit quality
+    upper_band: float
+    lower_band: float
+    midline: float
 
 
 class IndicatorSignals(TypedDict):
@@ -210,12 +182,15 @@ class TradingState(TypedDict):
 
     # Market data
     market: MarketData | None
-    news: NewsContext | None
     indicators: IndicatorSignals | None
     portfolio: Portfolio | None
     derivatives: DerivativesData | None  # Binance Futures data
     mtf_ohlcv: MultiTimeframeOHLCV | None  # Multi-timeframe OHLCV data
     mtf_trends: MultiTimeframeTrendData | None  # Multi-timeframe trend analysis
+
+    # QuantAgent-style analysis
+    pattern_analysis: PatternAnalysis | None  # Chart pattern recognition
+    trend_channel: TrendChannelData | None  # Regression channel analysis
 
     # Risk and decision
     risk: RiskState
@@ -224,7 +199,6 @@ class TradingState(TypedDict):
 
     # Metadata
     messages: Annotated[list, add]  # Agent conversation history
-    current_step: str
     error: str | None
     cycle_count: int
     last_updated: str  # ISO timestamp
@@ -234,12 +208,13 @@ def create_initial_state() -> TradingState:
     """Create initial trading state with defaults."""
     return TradingState(
         market=None,
-        news=None,
         indicators=None,
         portfolio=None,
         derivatives=None,
         mtf_ohlcv=None,
         mtf_trends=None,
+        pattern_analysis=None,
+        trend_channel=None,
         risk=RiskState(
             daily_loss_pct=0.0,
             max_loss_pct=3.0,
@@ -249,21 +224,10 @@ def create_initial_state() -> TradingState:
         decision=None,
         anomalies=[],
         messages=[],
-        current_step="start",
         error=None,
         cycle_count=0,
         last_updated=datetime.now().isoformat(),
     )
-
-
-class LLMDecisionInput(BaseModel):
-    """Input schema for LLM decision making."""
-
-    market_summary: str = Field(description="Current market conditions summary")
-    news_summary: str = Field(description="Recent news and sentiment summary")
-    indicator_summary: str = Field(description="Technical indicators summary")
-    portfolio_summary: str = Field(description="Current portfolio state")
-    risk_summary: str = Field(description="Risk constraints and limits")
 
 
 class LLMDecisionOutput(BaseModel):
@@ -275,4 +239,3 @@ class LLMDecisionOutput(BaseModel):
         ge=0.0, le=100.0, description="Suggested position size as % of available capital"
     )
     rationale: str = Field(description="Explanation for the decision")
-    key_factors: list[str] = Field(description="Key factors influencing decision")
