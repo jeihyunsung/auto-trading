@@ -21,7 +21,7 @@ Follow Ruff and MyPy settings in `pyproject.toml`: Python 3.12, 100-character li
 Tests use `pytest` with `pytest-asyncio` (`asyncio_mode = "auto"`). Place tests in the matching `tests/test_<area>/` package and name files `test_<feature>.py`. Prefer small unit tests with mocks or fixtures from `tests/conftest.py` for API-dependent code. Run `uv run pytest -v` locally; use `uv run pytest --cov=src/trading` when checking impact on critical trading logic.
 
 ## Commit & Pull Request Guidelines
-Git history is not available in this workspace, so follow a consistent imperative style such as `feat: add trailing-stop validation` or `fix: handle empty news feed`. Keep commits focused and explain behavior changes in the PR description. PRs should include the affected trading path, validation steps run (`pytest`, `ruff`, `mypy`, backtest command), linked issues, and screenshots when changing `src/trading/dashboard/`.
+Git history is not available in this workspace, so follow a consistent imperative style such as `feat: add trailing-stop validation` or `fix: handle missing orderbook`. Keep commits focused and explain behavior changes in the PR description. PRs should include the affected trading path, validation steps run (`pytest`, `ruff`, `mypy`, backtest command), linked issues, and screenshots when changing `src/trading/dashboard/`.
 
 ## Security & Configuration Tips
 Copy `.env.example` to `.env` and keep exchange and LLM keys out of version control. Use paper-trading or validation modes for development. Do not commit generated files from `backtest_results/` unless they are intentionally part of an analysis update.

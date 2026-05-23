@@ -28,8 +28,9 @@
 ├──────────────────────────────────────────────────────────────────────────┤
 │  MarketAgent        →   현재가, OHLCV, 호가창, 24h 변동률, 포트폴리오   │
 │                     →   파생상품 지표 (OI, L/S Ratio, Funding Rate)     │
-│  NewsAgent          →   뉴스 헤드라인, 감성점수, 영향도                  │
-│  IndicatorAgent     →   RSI, MACD, 추세, 모멘텀, 변동성                 │
+│                     →   다중 시간프레임 (5m/1h/4h/1d) OHLCV/추세 정렬   │
+│  IndicatorAgent     →   RSI, MACD, BB, OBV, 추세 채널, 모멘텀, 변동성  │
+│  PatternAgent       →   차트 패턴 (Vision LLM, 조건부 발동)              │
 │  AnomalyDetector    →   가격급등/급락, 거래량급증, 변동성스파이크        │
 └──────────────────────────────────────────────────────────────────────────┘
                                     ↓
@@ -119,27 +120,7 @@ Binance Futures 공개 API에서 파생상품 지표를 수집합니다. **API �
 | `total_value_krw` | 총 자산 가치 |
 | `exposure_pct` | BTC 노출도 (%) |
 
-### 2.4 NewsAgent
-
-**소스 파일**: `src/trading/agents/news_agent.py`
-
-뉴스 헤드라인을 수집하고 LLM으로 감성 분석을 수행합니다.
-
-| 데이터 | 설명 | 범위 |
-|--------|------|------|
-| `sentiment` | 감성 점수 | -1.0 (부정) ~ +1.0 (긍정) |
-| `impact` | 시장 영향도 | low / medium / high |
-| `summary` | 뉴스 요약 | 한국어 텍스트 |
-| `articles` | 수집된 뉴스 목록 | 제목, 소스, 발행일 |
-
-**고영향 이벤트 예시**:
-- ETF 승인/거부
-- 규제 관련 발표
-- 대형 거래소 해킹
-- 기관 투자자 유입 뉴스
-- 거시경제 이벤트 (연준, 인플레이션)
-
-### 2.5 IndicatorAgent
+### 2.4 IndicatorAgent
 
 **소스 파일**: `src/trading/agents/indicator_agent.py`
 
@@ -502,8 +483,7 @@ CRITICAL: Always consider your current position before deciding!
 {
   "action": "BUY",
   "confidence": 0.75,
-  "rationale": "RSI가 과매도 구간에 있고, 추세가 상승세이며, 뉴스 감성이 긍정적입니다.",
-  "key_factors": ["RSI 과매도", "상승 추세", "긍정적 뉴스"]
+  "rationale": "RSI가 과매도 구간에 있고, 추세가 상승세이며, 펀딩비가 마이너스로 숏 과열 상태입니다."
 }
 ```
 
@@ -536,13 +516,7 @@ if momentum == "oversold":    # 과매도 → 반등 기대 → 매수 신호
 elif momentum == "overbought": # 과매수 → 하락 기대 → 매도 신호
     bearish_signals += 1
 
-# 3. 뉴스 감성
-if sentiment > 0.3:
-    bullish_signals += 1
-elif sentiment < -0.3:
-    bearish_signals += 1
-
-# 4. RSI
+# 3. RSI
 if rsi < 30:      # 과매도 → 매수 신호
     bullish_signals += 1
 elif rsi > 70:    # 과매수 → 매도 신호
@@ -658,10 +632,22 @@ DecisionAgent의 결정이 실행되기 전에 RiskAgent가 리스크 규칙을 
 | 2 | HOLD 액션 | action == HOLD | - | 즉시 승인 |
 | 3 | 확신도 | confidence ≥ threshold | BUY/SELL: 60% | 거부 |
 | 4 | 일일 손실 | daily_loss < max | 3% | BUY 거부, SELL 허용 |
-| 5 | 포지션 한도 | exposure ≤ max | 50% | 크기 조정 |
-| 6 | 최소 주문 | order_amount ≥ min | 5,000 KRW | 특별 처리* |
-| 7 | 변동성 | volatility check | - | 크기 50% 축소 |
-| 8 | 이상 감지 | anomaly count | - | 경고만 |
+| 5 | **일일 거래 한도** | **buy_count < cap** | **20회/일** | **BUY 거부, SELL 항상 허용** |
+| 6 | 포지션 한도 | exposure ≤ max | 50% | 크기 조정 |
+| 7 | 최소 주문 | order_amount ≥ min | 5,000 KRW | 특별 처리* |
+| 8 | 변동성 | volatility check | - | 크기 50% 축소 |
+| 9 | 이상 감지 | anomaly count | - | 경고만 |
+
+### 8.1.1 일일 거래 한도 (Daily Trade Cap)
+
+**소스**: `src/trading/risk/limits.py` (`check_daily_trade_cap`, `get_buy_count_today`)
+
+과도한 거래로 인한 수수료/슬리피지 누적과 과적합을 방지하기 위해 BUY 횟수에 일일 한도를 둡니다.
+
+- **카운트 대상**: `logs/trades_YYYYMMDD.jsonl`에서 status="filled"인 BUY 항목만
+- **예외**: SELL과 HOLD는 항상 통과 — 손절 매도가 막히면 손실이 누적되므로 stop-loss 안전성 확보를 위해 의도적으로 면제
+- **기본값**: 20회 (settings `MAX_TRADES_PER_DAY`로 조정)
+- **카운트 영속화**: 메모리가 아닌 trade log 파일을 읽어 카운트 → 프로세스 재시작에도 카운트 유지
 
 ### 8.2 최소 주문 금액 특별 처리 (SELL)
 
@@ -815,7 +801,7 @@ final_size = min(10.0, max(0.0, base_size))
 ├─────────────────────────────────────────────────────────────┤
 │  현재가: 112,000,000 KRW                                    │
 │  추세: bullish, 모멘텀: oversold, RSI: 28                   │
-│  뉴스 감성: +0.5                                            │
+│  펀딩비: -0.005% (숏 과열), L/S=0.6                         │
 │  포트폴리오: KRW 56,780 / BTC 0.00039 (노출도 43%)          │
 ├─────────────────────────────────────────────────────────────┤
 │  DecisionAgent                                               │
@@ -942,8 +928,8 @@ final_size = min(10.0, max(0.0, base_size))
 | 모듈 | 파일 경로 |
 |------|----------|
 | 시장 데이터 수집 | `src/trading/agents/market_agent.py` |
-| 뉴스 수집 및 분석 | `src/trading/agents/news_agent.py` |
 | 기술적 지표 계산 | `src/trading/agents/indicator_agent.py` |
+| 차트 패턴 인식 (Vision LLM) | `src/trading/agents/pattern_agent.py` |
 | 의사결정 | `src/trading/agents/decision_agent.py` |
 | 리스크 검증 | `src/trading/agents/risk_agent.py`, `src/trading/risk/validator.py` |
 | 리스크 한도 | `src/trading/risk/limits.py` |
