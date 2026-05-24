@@ -173,6 +173,51 @@ def detect_rapid_movement(market: dict) -> RapidMovement:
     )
 
 
+def detect_stop_loss(
+    portfolio: dict | None,
+    threshold_pct: float,
+) -> Decision | None:
+    """Force a SELL when the open BTC position breaches the stop-loss threshold.
+
+    Triggered before LLM/rule-based decision so that hysteresis cannot delay
+    the exit. Observed live behaviour showed Hysteresis blocking SELL signals
+    for hours after a high-confidence BUY, accumulating loss while the LLM
+    repeatedly tried to cut. This guard short-circuits that path when the
+    unrealized loss on the open position exceeds the configured threshold.
+
+    Args:
+        portfolio: Current portfolio dict with `unrealized_pnl` and `btc_balance`.
+        threshold_pct: Stop-loss threshold (positive percent). 0 disables.
+
+    Returns:
+        Force-exit Decision or None.
+    """
+    if not portfolio or threshold_pct <= 0:
+        return None
+    btc = portfolio.get("btc_balance", 0) or 0
+    if btc <= 0:
+        return None  # No open position
+    pnl = portfolio.get("unrealized_pnl", 0) or 0
+    if pnl > -threshold_pct:
+        return None  # Within tolerance
+    exposure = portfolio.get("exposure_pct", 0) or 0
+    return Decision(
+        action="SELL",
+        confidence=0.95,
+        suggested_size_pct=100.0,
+        target_position_pct=0.0,
+        position_delta_pct=-exposure,
+        rationale=(
+            f"[stop_loss] Unrealized P&L {pnl:.2f}% breached threshold "
+            f"-{threshold_pct:.2f}%. Force-exit all {exposure:.1f}% exposure "
+            f"to prevent further loss."
+        ),
+        status="pending",
+        bypass_hysteresis=True,
+        decision_source="rapid_move",
+    )
+
+
 def check_mtf_trend_alignment(
     mtf_trends: MultiTimeframeTrendData | None,
     proposed_action: str,
@@ -325,6 +370,20 @@ class DecisionAgent:
                 status="pending",
                 decision_source="rule_based",
             )
+
+        # Stop-loss check runs BEFORE anything else: if the open position has
+        # breached the configured loss threshold, force-exit immediately and
+        # bypass hysteresis. This prevents the "SELL signal blocked for hours
+        # while loss compounds" pattern seen on the live bot.
+        from trading.config import get_settings as _get_settings  # local import
+        stop_loss_decision = detect_stop_loss(
+            portfolio, _get_settings().stop_loss_pct
+        )
+        if stop_loss_decision is not None:
+            logger.warning(
+                f"STOP-LOSS triggered: {stop_loss_decision['rationale']}"
+            )
+            return stop_loss_decision
 
         # Check for rapid price movements FIRST (override LLM if detected)
         rapid_move = detect_rapid_movement(market)

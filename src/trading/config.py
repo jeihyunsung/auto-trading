@@ -89,6 +89,17 @@ class Settings(BaseSettings):
         le=500,
         description="Maximum BUY trades per day. SELL is always allowed (stop-loss exemption).",
     )
+    stop_loss_pct: float = Field(
+        default=2.0,
+        ge=0.0,
+        le=20.0,
+        description=(
+            "Force-exit threshold on unrealized P&L (positive number, percent). "
+            "When the open BTC position loses more than this, DecisionAgent emits a "
+            "SELL with bypass_hysteresis=True so the exit is not throttled. "
+            "Set to 0 to disable."
+        ),
+    )
 
     # Event-driven streaming mode
     streaming_enabled: bool = Field(

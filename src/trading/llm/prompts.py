@@ -25,10 +25,32 @@ CRITICAL: Always consider your current position before deciding!
 2. SELL signals: bearish trend + overbought momentum + high volatility + HIGH exposure
 3. HOLD signals: conflicting signals + neutral conditions + high uncertainty + position not suitable
 
-## Confidence Levels
-- 0.8-1.0: Strong conviction, multiple confirming signals
-- 0.5-0.8: Moderate conviction, some confirming signals
-- 0.0-0.5: Low conviction, mixed signals (prefer HOLD)
+## Confidence Levels (STRICT calibration — do NOT inflate)
+Confidence reflects signal strength and downstream reversal cost. Inflated BUY
+confidence (e.g., 0.77 on RSI=66 + weak MACD) blocks legitimate SELLs from
+the hysteresis layer for hours, causing late exits. Calibrate carefully.
+
+- **0.85+**: Reserved for emergencies / very strong consensus.
+  REQUIRE all of:
+    (a) trend == required direction (bullish for BUY, bearish for SELL),
+    (b) RSI in the "easy" zone (<35 for BUY, >70 for SELL),
+    (c) MACD histogram strongly aligned (|hist| > 20% of recent average),
+    (d) derivatives confirm (funding signal not against you, OI trend aligned),
+    (e) MTF: ≥3 timeframes aligned.
+  Triggers hysteresis emergency override — be honest about strength.
+
+- **0.65–0.84**: Standard conviction. REQUIRE at least 3 of (a)–(e).
+  NEVER reach 0.70+ on RSI in 45–65 neutral band — that is fence-sitting, use 0.55–0.65.
+
+- **0.50–0.64**: Weak/moderate signals. Mixed reads. Likely HOLD unless sizing matters.
+
+- **<0.50**: Reject — prefer HOLD.
+
+## Self-Check Before Setting BUY Confidence ≥ 0.7
+Ask yourself: "If price reverses 1% in the next hour, will I be willing to SELL
+with similar confidence?" If yes (i.e., your read is reactive not committed),
+lower BUY confidence by 0.10. The hysteresis layer punishes BUY ≥ 0.70
+followed by SELL — only commit if the signal would survive that reversal.
 
 ## Decision Consistency
 - Review your recent decision history before making a new decision
@@ -166,6 +188,19 @@ DECISION_USER_PROMPT = """## Market Analysis Request
 
 Based on this analysis, what is your trading recommendation?
 Consider your recent decisions to maintain consistency and avoid flip-flopping.
+
+## Self-Throttling Rule (IMPORTANT — prevents fee-eating clusters)
+Examine "Last Trade" timestamp in the history above. If the last executed
+trade on this symbol was:
+  - Within 15 minutes (for a BUY decision) AND price/RSI have not changed
+    meaningfully (price moved <0.3% or RSI moved <3 units): prefer HOLD.
+  - Within 5 minutes (for a SELL decision) under the same condition:
+    prefer HOLD.
+Do not add to the same direction unless the new setup is clearly stronger
+(e.g., breakout confirmed, new derivatives signal, MTF shifted).
+The hysteresis layer will also enforce this, but you should self-throttle
+to keep decisions consistent and avoid wasted LLM calls.
+
 Respond with JSON containing: action, confidence, rationale
 """
 

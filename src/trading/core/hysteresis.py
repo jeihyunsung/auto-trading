@@ -36,6 +36,16 @@ class HysteresisConfig:
     decay_factor_per_hour: float = 0.1
     emergency_override_confidence: float = 0.90
     post_trade_cooldown: timedelta = field(default_factory=lambda: timedelta(minutes=30))
+    # Cooldown for SAME-direction trades (BUY→BUY, SELL→SELL). Without this,
+    # clustered same-direction trades within 5–15min provide no DCA benefit
+    # (price barely moves) but double the fees. SELL window is shorter so
+    # the bot can still scale out of a losing position quickly.
+    same_direction_cooldown_buy: timedelta = field(
+        default_factory=lambda: timedelta(minutes=15)
+    )
+    same_direction_cooldown_sell: timedelta = field(
+        default_factory=lambda: timedelta(minutes=5)
+    )
 
     @classmethod
     def streaming(cls) -> "HysteresisConfig":
@@ -44,13 +54,19 @@ class HysteresisConfig:
         Lower thresholds for faster response to market events.
         Streaming mode already filters noise via trigger conditions.
 
+        action_reversal_delta was lowered 0.25 → 0.15: live observation
+        showed SELL signals with 4-TF bearish alignment being blocked by
+        only -0.01 delta, preventing the bot from cutting losses in a
+        downtrend right after a BUY. 0.15 still requires meaningful
+        conviction shift but lets correct stop-loss exits through.
+
         Returns:
             HysteresisConfig for streaming mode.
         """
         return cls(
             hold_to_action_delta=0.10,
             action_to_hold_delta=0.15,
-            action_reversal_delta=0.25,
+            action_reversal_delta=0.15,
             min_hold_duration=timedelta(minutes=3),
             decay_factor_per_hour=0.15,
             emergency_override_confidence=0.85,
@@ -158,6 +174,31 @@ class HysteresisManager:
         self.previous: DecisionHistory | None = None
         self.last_trade_action: DecisionHistory | None = None  # Tracks last BUY/SELL
         self.stats = HysteresisStats()
+        # Recently-blocked actions for cumulative relaxation. (timestamp, action)
+        from collections import deque
+        self._blocked_actions: deque = deque(maxlen=100)
+
+    def _count_recent_blocks(
+        self,
+        action: str,
+        now: datetime,
+        window_minutes: int = 30,
+    ) -> int:
+        """Count how many same-direction actions were blocked recently.
+
+        Args:
+            action: BUY or SELL to count.
+            now: Reference time.
+            window_minutes: Lookback window.
+
+        Returns:
+            Number of matching blocked actions within the window.
+        """
+        cutoff = now - timedelta(minutes=window_minutes)
+        return sum(
+            1 for ts, a in self._blocked_actions
+            if a == action and ts >= cutoff
+        )
 
     def apply_hysteresis(
         self,
@@ -188,6 +229,48 @@ class HysteresisManager:
 
         prev_action = self.previous["action"]
         prev_confidence = self.previous["confidence"]
+
+        # Same-direction cooldown: block clustered BUY→BUY or SELL→SELL
+        # within window. WebSocket triggers fire every ~60s; without this,
+        # the LLM re-emits the same signal within minutes — DCA effect
+        # is nil and fees double. Asymmetric: SELL window is shorter so
+        # scale-outs of a losing position are not over-throttled.
+        # Compared against last_trade_action (actual fill), not memory
+        # `previous` (which may be a HOLD), so a HOLD in between does not
+        # reset the cooldown window.
+        if (
+            new_action in ("BUY", "SELL")
+            and self.last_trade_action is not None
+            and self.last_trade_action["action"] == new_action
+        ):
+            last_trade_time = datetime.fromisoformat(
+                self.last_trade_action["timestamp"]
+            )
+            time_since_trade = current_time - last_trade_time
+            cooldown = (
+                self.config.same_direction_cooldown_buy
+                if new_action == "BUY"
+                else self.config.same_direction_cooldown_sell
+            )
+            if time_since_trade < cooldown:
+                remaining = cooldown - time_since_trade
+                logger.info(
+                    f"Same-direction cooldown active: {new_action}→{new_action} "
+                    f"blocked. Remaining: {remaining.total_seconds() / 60:.1f} min"
+                )
+                self.stats.decisions_overridden += 1
+                return Decision(
+                    action="HOLD",
+                    confidence=new_decision["confidence"],
+                    suggested_size_pct=0.0,
+                    rationale=(
+                        f"[same-dir cooldown] {new_action} blocked. "
+                        f"Wait {remaining.total_seconds() / 60:.0f}min after last {new_action}. "
+                        f"Original: {new_decision['rationale']}"
+                    ),
+                    status=new_decision["status"],
+                    original_action=new_action,
+                )
 
         # Same action - always accept, update confidence
         if new_action == prev_action:
@@ -248,6 +331,47 @@ class HysteresisManager:
         # Apply time decay
         required_delta = self._apply_time_decay(required_delta, current_time)
 
+        # Position-sizing strength relaxation: when PositionSizer requests
+        # a large exposure change, relax (NOT bypass) the threshold so a
+        # mediocre confidence cannot punch through on sizing alone.
+        # Codex review: full-bypass introduces a new failure mode where
+        # any large delta passes regardless of conviction. Use multiplier.
+        delta_pct = abs(float(new_decision.get("position_delta_pct", 0) or 0))
+        if delta_pct >= 25.0:
+            # Very strong sizing signal (e.g., full exit) — halve threshold
+            required_delta_relaxed = required_delta * 0.5
+            logger.info(
+                f"Hysteresis relaxed by sizing strength (large): "
+                f"|delta|={delta_pct:.1f}% → required {required_delta:.2f}→{required_delta_relaxed:.2f}"
+            )
+            required_delta = required_delta_relaxed
+        elif delta_pct >= 15.0:
+            # Moderate sizing signal — 30% relaxation
+            required_delta_relaxed = required_delta * 0.7
+            logger.info(
+                f"Hysteresis relaxed by sizing strength (moderate): "
+                f"|delta|={delta_pct:.1f}% → required {required_delta:.2f}→{required_delta_relaxed:.2f}"
+            )
+            required_delta = required_delta_relaxed
+
+        # Cumulative blocked-SELL relaxation (Codex suggestion): if N SELL
+        # signals were blocked recently in a short window, conviction is
+        # building gradually — relax to let the bot exit before more loss.
+        # This catches the "gradual conviction growth" pattern that the
+        # 0.85 emergency override never triggers on.
+        if (
+            new_action in ("BUY", "SELL")
+            and self._count_recent_blocks(new_action, current_time, window_minutes=30) >= 3
+        ):
+            blocks = self._count_recent_blocks(new_action, current_time, window_minutes=30)
+            cumulative_factor = max(0.4, 1.0 - 0.15 * (blocks - 2))
+            required_delta_relaxed = required_delta * cumulative_factor
+            logger.info(
+                f"Hysteresis relaxed by cumulative blocks ({blocks} in 30min): "
+                f"required {required_delta:.2f}→{required_delta_relaxed:.2f}"
+            )
+            required_delta = required_delta_relaxed
+
         # Check emergency override
         if new_confidence >= self.config.emergency_override_confidence:
             logger.info(
@@ -281,6 +405,10 @@ class HysteresisManager:
 
         if is_reversal:
             self.stats.reversals_blocked += 1
+
+        # Record block for cumulative relaxation tracking
+        if new_action in ("BUY", "SELL"):
+            self._blocked_actions.append((current_time, new_action))
 
         # Return HOLD decision when blocking action change
         # "Maintaining BUY" means "keep the bought position" = HOLD, not "buy more"
