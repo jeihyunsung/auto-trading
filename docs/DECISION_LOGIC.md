@@ -649,6 +649,34 @@ DecisionAgent의 결정이 실행되기 전에 RiskAgent가 리스크 규칙을 
 - **기본값**: 20회 (settings `MAX_TRADES_PER_DAY`로 조정)
 - **카운트 영속화**: 메모리가 아닌 trade log 파일을 읽어 카운트 → 프로세스 재시작에도 카운트 유지
 
+### 8.1.2 자동 손절 (Stop-Loss)
+
+**소스**: `src/trading/agents/decision_agent.py:detect_stop_loss`
+
+DecisionAgent의 가장 첫 단계로 실행되어, 보유 BTC 평가손실이 임계값을 넘으면 hysteresis와 LLM을 모두 우회하여 강제 매도합니다. **Live 관찰에서 hysteresis가 SELL 신호를 4시간 차단해 손실이 누적된 사례**를 방지하기 위해 추가되었습니다.
+
+- **트리거 조건**: `portfolio.unrealized_pnl < -stop_loss_pct` AND `btc_balance > 0`
+- **기본값**: `STOP_LOSS_PCT=2.0` (2% 손실 시 발동, 0이면 비활성)
+- **동작**: `action=SELL, confidence=0.95, target_position_pct=0%, bypass_hysteresis=True`
+- **실행 순서**: rapid_movement, LLM, MTF check **모두 전에** 실행 → 어떤 신호도 stop-loss를 막을 수 없음
+
+### 8.1.3 Decision Hysteresis (진동 방지)
+
+**소스**: `src/trading/core/hysteresis.py`
+
+같은 시점에 BUY↔SELL 반복(flip-flopping)과 무의미한 같은 방향 클러스터를 방지하는 다중 정책. Live 관찰 + Codex 리뷰 기반으로 튜닝됨.
+
+| 정책 | 동작 | streaming 기본값 |
+|---|---|---|
+| 확신도 델타 | BUY→SELL 시 `new_conf - prev_conf ≥ action_reversal_delta` 요구 | 0.15 (live observation으로 0.25→0.15 하향) |
+| Post-trade cooldown | 거래 후 N분 안 reversal 차단 | 15분 |
+| **Same-direction cooldown** | BUY→BUY / SELL→SELL 클러스터 차단 (asymmetric) | BUY 15분, SELL 5분 |
+| Sizing 강도 완화 | `|delta_pct| ≥ 25%` → required × 0.5 / `≥ 15%` → × 0.7 (multiplier only) | 활성 |
+| 누적 차단 카운터 | 30분 내 같은 방향 ≥3회 차단 시 점진적 완화 (0.4x floor) | 활성 |
+| Emergency override | confidence ≥ N → 모든 hysteresis 우회 | 0.85 (streaming) |
+
+**Codex 권고 핵심**: Sizing 강도는 multiplier로만 적용 (full bypass는 mediocre SELL이 통과하는 새 failure mode를 만듦).
+
 ### 8.2 최소 주문 금액 특별 처리 (SELL)
 
 **중요**: SELL 주문에서 percentage 기반 계산 금액이 최소 주문금액(5,000 KRW) 미만인 경우:

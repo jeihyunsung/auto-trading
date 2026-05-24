@@ -82,13 +82,14 @@ The `TradingState` TypedDict accumulates data as it flows through the graph:
 
 ### Decision Flow
 
-1. **Rapid movement override** (`detect_rapid_movement`): bypasses LLM on 15min ≥1.5% / 30min ≥2% / 1h ≥3% moves
-2. **LLM decision** (`_decide_with_llm`): uses cached HOLD decisions for similar market state. Cache key includes trend, momentum, RSI (5-unit bins), exposure (5%-unit bins), volatility, **funding_signal, position_bias, oi_trend** — so a derivatives shift invalidates an otherwise-identical entry.
-3. **MTF trend alignment check** (`check_mtf_trend_alignment`): blocks LLM action if dominant trend disagrees, unless confidence ≥ 0.65 override
-4. **Position sizing** (`PositionSizer`): confidence → target position % → delta; HOLD if delta below threshold
-5. **Hysteresis** (`HysteresisManager`): blocks rapid BUY↔SELL reversals
-6. **Daily trade cap** (`RiskManager.check_daily_trade_cap`): BUY rejected past `max_trades_per_day` (default 20). **SELL always allowed** — stop-loss exits are never throttled.
-7. **Rule-based fallback**: 6-signal bullish/bearish count (trend, momentum, RSI, position_bias, funding_signal, OI_trend)
+1. **Stop-loss force-exit** (`detect_stop_loss`): if `portfolio.unrealized_pnl < -settings.stop_loss_pct` (default -2%), emit SELL with `bypass_hysteresis=True` immediately. Runs FIRST so hysteresis cannot delay the exit. Disable by setting `stop_loss_pct=0`.
+2. **Rapid movement override** (`detect_rapid_movement`): bypasses LLM on 15min ≥1.5% / 30min ≥2% / 1h ≥3% moves
+3. **LLM decision** (`_decide_with_llm`): uses cached HOLD decisions for similar market state. Cache key includes trend, momentum, RSI (5-unit bins), exposure (5%-unit bins), volatility, **funding_signal, position_bias, oi_trend** — so a derivatives shift invalidates an otherwise-identical entry.
+4. **MTF trend alignment check** (`check_mtf_trend_alignment`): blocks LLM action if dominant trend disagrees, unless confidence ≥ 0.65 override
+5. **Position sizing** (`PositionSizer`): confidence → target position % → delta; HOLD if delta below threshold
+6. **Hysteresis** (`HysteresisManager`): blocks rapid BUY↔SELL reversals. See below for full policy.
+7. **Daily trade cap** (`RiskManager.check_daily_trade_cap`): BUY rejected past `max_trades_per_day` (default 20). **SELL always allowed** — stop-loss exits are never throttled.
+8. **Rule-based fallback**: 6-signal bullish/bearish count (trend, momentum, RSI, position_bias, funding_signal, OI_trend)
 
 ### Position Sizing (`core/position_sizing.py`)
 
@@ -181,9 +182,36 @@ The bot makes LLM (OpenAI) calls only inside `DecisionAgent` and conditionally i
 
 ## Decision Hysteresis (`core/hysteresis.py`)
 
-Prevents BUY↔SELL flip-flopping. For reversals, requires confidence delta ≥ threshold (default 0.35). Example: BUY@0.70 → SELL needs ≥1.05 confidence (blocked → converted to HOLD).
+Multi-layer policy on top of confidence delta — tuned from live observation that uniform thresholds produce structurally late SELLs after high-confidence BUYs.
 
-CLI flags: `--hysteresis-reversal-delta 0.4`, `--no-hysteresis`
+### Confidence delta (base)
+For BUY↔SELL reversal, requires `new_conf - last_trade_conf ≥ action_reversal_delta`. Streaming preset uses **0.15** (lowered from 0.25 after live observation showed legitimate SELLs blocked by delta=-0.14). Daily-backtest preset keeps 0.35.
+
+### Post-trade cooldown (reversal-only)
+After an executed trade, BUY→SELL or SELL→BUY is blocked for `post_trade_cooldown` (streaming=15min, daily=30min, conservative=60min). Same-direction trades use a separate window (next item).
+
+### Same-direction cooldown (asymmetric)
+- `same_direction_cooldown_buy=15min` — blocks BUY→BUY clusters that provide no DCA value but double fees
+- `same_direction_cooldown_sell=5min` — shorter so scale-out of a losing position is not over-throttled
+- Compared against last_trade_action (actual fill), not memory `previous` — a HOLD in between does not reset the window
+
+### Sizing-aware relaxation
+When PositionSizer requests a large exposure change, relax (NOT bypass) the required delta:
+- `|position_delta_pct| ≥ 25%` → required delta × 0.5 (e.g., full-exit signal)
+- `|position_delta_pct| ≥ 15%` → required delta × 0.7
+
+Multiplier-only (Codex correction): a full bypass introduced a new failure mode where mediocre SELLs punched through on any large delta.
+
+### Cumulative blocked-action relaxation
+Catches "gradual conviction growth" patterns that the 0.85 emergency override never triggers on. When `_blocked_actions` deque records ≥3 same-direction blocks within 30min, required delta is progressively reduced down to 0.4× floor.
+
+### Emergency override
+`new_confidence ≥ emergency_override_confidence` (streaming=0.85, daily=0.90, conservative=0.95) bypasses all delta checks. Reserved for crisis-level certainty.
+
+### CLI / config
+- `--hysteresis-reversal-delta 0.4` — polling-mode override only
+- `--no-hysteresis` — disable entirely
+- `HYSTERESIS_MODE=streaming|daily|conservative` (env) — preset selection for streaming mode
 
 ## Environment Variables
 
@@ -201,6 +229,7 @@ Optional:
 - `HYSTERESIS_MODE`: `streaming` / `daily` / `conservative`
 - `LLM_CACHE_TTL_SECONDS`: HOLD-decision cache TTL (default 900s, must exceed polling interval)
 - `MAX_TRADES_PER_DAY`: Daily BUY cap (default 20). SELL is always allowed.
+- `STOP_LOSS_PCT`: Per-position stop-loss threshold (default 2.0, percent). 0 disables.
 
 ## Testing
 
