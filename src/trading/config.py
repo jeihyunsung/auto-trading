@@ -83,6 +83,17 @@ class Settings(BaseSettings):
         le=3600,
         description="Seconds to cache HOLD LLM decisions (default 15min, must exceed polling interval)",
     )
+    llm_request_timeout_seconds: float = Field(
+        default=45.0,
+        ge=5.0,
+        le=300.0,
+        description=(
+            "HTTP timeout for OpenAI API calls (seconds). Prevents the event "
+            "loop from hanging indefinitely on a stuck connection. Combined "
+            "with bounded retries (max 2) this caps any single decision at "
+            "~3x timeout in worst case."
+        ),
+    )
     max_trades_per_day: int = Field(
         default=20,
         ge=1,

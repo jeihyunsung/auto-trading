@@ -308,6 +308,8 @@ class PatternAgent:
                 api_key=settings.openai_api_key,
                 model=vision_model,
                 temperature=0.1,
+                timeout=settings.llm_request_timeout_seconds,
+                max_retries=2,
             )
 
             messages = [

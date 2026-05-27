@@ -70,6 +70,15 @@ class DecisionValidator:
         warnings = []
         rejection_reason = None
 
+        # Urgent-exit detection: stop-loss / rapid_movement set
+        # bypass_hysteresis=True. For these, max_single_trade_pct (10%)
+        # would force-fragment the exit into multiple cycles — observed
+        # as the 5/27 stop-loss firing 4 times instead of once. Skip
+        # adjust_trade_size and the volatility 50% cut so the urgent
+        # decision goes through at the requested size, capped only by
+        # available holdings/cash.
+        is_urgent = bool(decision.get("bypass_hysteresis", False))
+
         # Check 1: Kill switch
         if self.risk_manager.is_kill_switch_on:
             return ValidationResult(
@@ -120,10 +129,31 @@ class DecisionValidator:
         if not ok:
             warnings.append(msg)
 
-        # Adjust size if needed
-        adjusted_size = self.risk_manager.adjust_trade_size(
-            portfolio, decision["action"], requested_size
-        )
+        # Adjust size — urgent exits skip max_single_trade_pct cap so the
+        # full position can be unwound in a single order. Still respect
+        # available holdings / cash as hard caps.
+        if is_urgent:
+            if decision["action"] == "SELL":
+                # Cap by current exposure (cannot sell more than we hold)
+                adjusted_size = min(requested_size, portfolio.exposure_pct)
+            else:  # BUY (rapid_movement)
+                cash_pct = (
+                    (portfolio.cash_krw / portfolio.total_value_krw * 100)
+                    if portfolio.total_value_krw > 0 else 0
+                )
+                # Also respect overall position limit (max_position_pct)
+                position_room = (
+                    self.risk_manager.limits.max_position_pct - portfolio.exposure_pct
+                )
+                adjusted_size = min(requested_size, cash_pct, max(0, position_room))
+            logger.info(
+                f"Urgent exit: size {requested_size:.1f}% → {adjusted_size:.1f}% "
+                f"(skipping max_single_trade_pct={self.risk_manager.limits.max_single_trade_pct}%)"
+            )
+        else:
+            adjusted_size = self.risk_manager.adjust_trade_size(
+                portfolio, decision["action"], requested_size
+            )
 
         # Debug logging for size adjustment
         logger.debug(
@@ -181,8 +211,10 @@ class DecisionValidator:
                 f"adjusted_size={adjusted_size:.2f}%, exposure={portfolio.exposure_pct:.2f}%"
             )
 
-        # Check 7: High volatility caution
-        if volatility == "high":
+        # Check 7: High volatility caution (skipped for urgent exits —
+        # halving a stop-loss size during a volatile drop is the opposite
+        # of what we want; better to fully exit at once)
+        if volatility == "high" and not is_urgent:
             adjusted_size = adjusted_size * 0.5  # Reduce size in high volatility
             warnings.append("Size reduced 50% due to high volatility")
         rule_checks["volatility_check"] = True

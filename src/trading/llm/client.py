@@ -101,10 +101,17 @@ class LLMClient:
             logger.warning("OpenAI API key not provided - LLM features disabled")
             self._client = None
         else:
+            # Explicit timeout + bounded retries prevent the bot from
+            # silently hanging on a stuck HTTP call. Observed 18h+ freeze
+            # where systemd reported "active running" but no log activity —
+            # default langchain_openai had no timeout, so a stuck connection
+            # blocked the event loop indefinitely.
             self._client = ChatOpenAI(
                 api_key=self._api_key,
                 model=self._model,
                 temperature=self._temperature,
+                timeout=settings.llm_request_timeout_seconds,
+                max_retries=2,
             )
 
     @property
