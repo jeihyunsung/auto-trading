@@ -445,7 +445,6 @@ class DecisionAgent:
         except Exception as e:
             logger.warning(f"LLM decision failed: {e}")
             # Send Slack alert for LLM error
-            from trading.config import get_settings
             model_name = get_settings().openai_model
             _alert_llm_error(str(e), model_name)
 
