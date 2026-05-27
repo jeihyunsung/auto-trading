@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Literal
 
 # Decision recording moved to ops_agent.py
+from trading.config import get_settings
 from trading.core.position_sizing import PositionSizer, PositionSizingConfig, get_position_sizer
 from trading.core.time import KST
 from trading.core.state import Decision, MultiTimeframeTrendData, TradingState
@@ -416,9 +417,8 @@ class DecisionAgent:
         # breached the configured loss threshold, force-exit immediately and
         # bypass hysteresis. This prevents the "SELL signal blocked for hours
         # while loss compounds" pattern seen on the live bot.
-        from trading.config import get_settings as _get_settings  # local import
         stop_loss_decision = detect_stop_loss(
-            portfolio, _get_settings().stop_loss_pct
+            portfolio, get_settings().stop_loss_pct
         )
         if stop_loss_decision is not None:
             logger.warning(
