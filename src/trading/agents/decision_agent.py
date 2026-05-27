@@ -260,6 +260,61 @@ def detect_stop_loss(
     )
 
 
+def detect_take_profit(
+    portfolio: dict | None,
+    threshold_pct: float,
+    sell_fraction: float = 0.5,
+) -> Decision | None:
+    """Force a partial SELL when unrealized P&L exceeds the take-profit threshold.
+
+    Mirror of `detect_stop_loss` on the upside. Locks in some profit
+    automatically when the position runs in our favor by `threshold_pct`,
+    without waiting for the LLM/Hysteresis chain to converge on a SELL.
+    Live observation showed BUY→SELL transitions consistently lag the
+    peak by ~4 hours due to Hysteresis anchoring on the BUY confidence;
+    this guard short-circuits the upside lag specifically.
+
+    Partial (default 50%) rather than full so the remaining position
+    can still ride a real uptrend leg — the LLM still gets a chance to
+    sell the rest when the trend reverses.
+
+    Args:
+        portfolio: Current portfolio dict with `unrealized_pnl` and `btc_balance`.
+        threshold_pct: Take-profit threshold (positive percent). 0 disables.
+        sell_fraction: Portion of current exposure to sell (0..1). Default 0.5.
+
+    Returns:
+        Force-exit Decision or None.
+    """
+    if not portfolio or threshold_pct <= 0:
+        return None
+    btc = portfolio.get("btc_balance", 0) or 0
+    if btc <= 0:
+        return None  # No open position
+    pnl = portfolio.get("unrealized_pnl", 0) or 0
+    if pnl < threshold_pct:
+        return None  # Not enough profit yet
+    exposure = portfolio.get("exposure_pct", 0) or 0
+    delta_pct = exposure * max(0.0, min(1.0, sell_fraction))
+    remaining_pct = exposure - delta_pct
+    return Decision(
+        action="SELL",
+        confidence=0.90,
+        suggested_size_pct=delta_pct,
+        target_position_pct=remaining_pct,
+        position_delta_pct=-delta_pct,
+        rationale=(
+            f"[take_profit] Unrealized P&L +{pnl:.2f}% breached threshold "
+            f"+{threshold_pct:.2f}%. Selling {sell_fraction*100:.0f}% of "
+            f"{exposure:.1f}% exposure to lock in profit; keeping "
+            f"{remaining_pct:.1f}% for further upside."
+        ),
+        status="pending",
+        bypass_hysteresis=True,
+        decision_source="rapid_move",
+    )
+
+
 def check_mtf_trend_alignment(
     mtf_trends: MultiTimeframeTrendData | None,
     proposed_action: str,
@@ -413,18 +468,26 @@ class DecisionAgent:
                 decision_source="rule_based",
             )
 
-        # Stop-loss check runs BEFORE anything else: if the open position has
-        # breached the configured loss threshold, force-exit immediately and
-        # bypass hysteresis. This prevents the "SELL signal blocked for hours
-        # while loss compounds" pattern seen on the live bot.
-        stop_loss_decision = detect_stop_loss(
-            portfolio, get_settings().stop_loss_pct
-        )
+        # Stop-loss and take-profit guards run BEFORE anything else: they
+        # bypass LLM, MTF, and Hysteresis entirely so the exit cannot lag.
+        # Stop-loss prevents loss compounding; take-profit locks in upside
+        # before Hysteresis (anchored on the BUY confidence) delays the SELL.
+        _s = get_settings()
+        stop_loss_decision = detect_stop_loss(portfolio, _s.stop_loss_pct)
         if stop_loss_decision is not None:
             logger.warning(
                 f"STOP-LOSS triggered: {stop_loss_decision['rationale']}"
             )
             return stop_loss_decision
+
+        take_profit_decision = detect_take_profit(
+            portfolio, _s.take_profit_pct, _s.take_profit_sell_fraction
+        )
+        if take_profit_decision is not None:
+            logger.info(
+                f"TAKE-PROFIT triggered: {take_profit_decision['rationale']}"
+            )
+            return take_profit_decision
 
         # Check for rapid price movements FIRST (override LLM if detected)
         rapid_move = detect_rapid_movement(market)

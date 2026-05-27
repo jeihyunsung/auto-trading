@@ -135,6 +135,27 @@ class Settings(BaseSettings):
             "Set to 0 to disable."
         ),
     )
+    take_profit_pct: float = Field(
+        default=1.5,
+        ge=0.0,
+        le=20.0,
+        description=(
+            "Take-profit threshold on unrealized P&L (positive percent). When the "
+            "open position gains more than this, DecisionAgent emits a partial "
+            "SELL (default 50%% of exposure) with bypass_hysteresis=True to lock "
+            "in profit. Mirror of stop_loss_pct on the upside. Set to 0 to disable."
+        ),
+    )
+    take_profit_sell_fraction: float = Field(
+        default=0.5,
+        ge=0.1,
+        le=1.0,
+        description=(
+            "Fraction of current exposure to sell when take-profit fires. "
+            "0.5 (default) sells half, leaves the other half to ride further upside. "
+            "1.0 sells everything (more conservative)."
+        ),
+    )
 
     # Event-driven streaming mode
     streaming_enabled: bool = Field(
