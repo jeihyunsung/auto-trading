@@ -173,6 +173,47 @@ def detect_rapid_movement(market: dict) -> RapidMovement:
     )
 
 
+def cap_high_rsi_buy_confidence(
+    action: str,
+    confidence: float,
+    rsi: float,
+    threshold: float,
+    cap: float,
+) -> float:
+    """Cap BUY confidence when RSI is already elevated.
+
+    High-RSI BUY entries are structurally late — the trend has already moved.
+    Without a cap, the LLM (potentially boosted by MTF +0.1 alignment bonus)
+    can push confidence into the 0.7-0.8 PositionSizer tier (35% target),
+    which then anchors Hysteresis at a high bar so the subsequent SELL is
+    delayed. Capping at 0.65 keeps the entry in the 0.6-0.7 tier (25%
+    target) and lets any future SELL at 0.80 pass Hysteresis.
+
+    Only applies to BUY actions. SELL and HOLD pass through untouched.
+
+    Args:
+        action: BUY / SELL / HOLD.
+        confidence: Current confidence (after any MTF adjustment).
+        rsi: Current RSI value.
+        threshold: RSI level above which the cap activates.
+        cap: Maximum allowed confidence above threshold.
+
+    Returns:
+        Possibly-capped confidence value.
+    """
+    if action != "BUY":
+        return confidence
+    if rsi <= threshold:
+        return confidence
+    if confidence <= cap:
+        return confidence
+    logger.info(
+        f"BUY confidence capped: RSI={rsi:.1f} > {threshold:.0f} → "
+        f"{confidence:.2f} → {cap:.2f}"
+    )
+    return cap
+
+
 def detect_stop_loss(
     portfolio: dict | None,
     threshold_pct: float,
@@ -617,6 +658,19 @@ class DecisionAgent:
         # Adjust confidence based on MTF analysis
         adjusted_confidence = min(1.0, max(0.0, result.confidence + mtf_conf_adj))
 
+        # Cap BUY confidence when RSI is already elevated (applied AFTER MTF
+        # bonus so the +0.1 alignment boost can't push the decision into a
+        # higher sizing tier). See cap_high_rsi_buy_confidence docstring.
+        _settings = get_settings()
+        rsi_for_cap = indicators.get("signals", {}).get("rsi", 50)
+        adjusted_confidence = cap_high_rsi_buy_confidence(
+            result.action,
+            adjusted_confidence,
+            rsi_for_cap,
+            _settings.buy_conf_cap_rsi_threshold,
+            _settings.buy_conf_cap_value,
+        )
+
         # Block trade if MTF trends don't align
         # Exception: Allow BUY/SELL with high confidence to enable aggressive trading
         MTF_OVERRIDE_CONFIDENCE = 0.65  # Lowered for more aggressive entry
@@ -837,6 +891,16 @@ class DecisionAgent:
 
         # Adjust confidence based on MTF analysis
         adjusted_confidence = min(1.0, max(0.0, confidence + mtf_conf_adj))
+
+        # Apply BUY confidence cap at high RSI (same policy as LLM path).
+        _settings_rb = get_settings()
+        adjusted_confidence = cap_high_rsi_buy_confidence(
+            proposed_action,
+            adjusted_confidence,
+            rsi,
+            _settings_rb.buy_conf_cap_rsi_threshold,
+            _settings_rb.buy_conf_cap_value,
+        )
 
         # Block trade if MTF trends don't align
         signal_summary = f"bullish={bullish_signals}, bearish={bearish_signals}"

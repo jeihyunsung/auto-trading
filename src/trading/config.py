@@ -94,6 +94,30 @@ class Settings(BaseSettings):
             "~3x timeout in worst case."
         ),
     )
+    buy_conf_cap_rsi_threshold: float = Field(
+        default=60.0,
+        ge=30.0,
+        le=80.0,
+        description=(
+            "RSI above which BUY confidence is capped (default 60). High RSI "
+            "BUYs are structurally late entries — capping the confidence "
+            "prevents the PositionSizer from jumping to a larger tier AND "
+            "prevents Hysteresis from anchoring future SELLs at a high bar. "
+            "Live observation: 6/6 BUYs in 5/24-5/25 came at RSI 50-66, "
+            "average BUY price was 115.2M but average SELL was 113.6M."
+        ),
+    )
+    buy_conf_cap_value: float = Field(
+        default=0.65,
+        ge=0.5,
+        le=0.85,
+        description=(
+            "Maximum confidence for BUY when RSI exceeds buy_conf_cap_rsi_threshold. "
+            "Default 0.65 keeps the decision in the 25% PositionSizer tier "
+            "(0.6-0.7) instead of jumping to 35% (0.7-0.8), and ensures any "
+            "future SELL at conf 0.80 can pass Hysteresis (delta ≥ 0.15)."
+        ),
+    )
     max_trades_per_day: int = Field(
         default=20,
         ge=1,
