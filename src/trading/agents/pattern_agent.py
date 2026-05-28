@@ -480,6 +480,17 @@ def pattern_agent_node(state: TradingState) -> dict:
     Returns:
         State updates with pattern analysis.
     """
+    # Global kill switch: pattern_agent has hung the event loop in prod
+    # (matplotlib + vision LLM call). Disabling via PATTERN_AGENT_ENABLED=false
+    # returns immediately without invoking matplotlib or any HTTP call.
+    from trading.config import get_settings
+    if not get_settings().pattern_agent_enabled:
+        return {
+            "pattern_analysis": _no_pattern(),
+            "error": None,
+            "last_updated": datetime.now(KST).isoformat(),
+        }
+
     # Check if pattern analysis should run this cycle
     if not should_analyze_pattern(state):
         return {

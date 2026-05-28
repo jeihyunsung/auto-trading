@@ -146,6 +146,15 @@ class Settings(BaseSettings):
             "in profit. Mirror of stop_loss_pct on the upside. Set to 0 to disable."
         ),
     )
+    pattern_agent_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable chart-pattern vision LLM analysis. Live observation showed "
+            "the bot hanging immediately after indicator calculation in this "
+            "agent (matplotlib chart gen + OpenAI vision call), causing 30+ "
+            "minute freezes. Disable when watchdog restarts loop repeatedly."
+        ),
+    )
     take_profit_sell_fraction: float = Field(
         default=0.5,
         ge=0.1,
