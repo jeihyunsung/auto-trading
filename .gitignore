@@ -53,5 +53,7 @@ Thumbs.db
 # Backtest results (generated data)
 backtest_results/
 
-# Claude Code local settings
+# Claude Code local settings (but share skills across machines)
 .claude/
+!.claude/skills/
+!.claude/skills/**
