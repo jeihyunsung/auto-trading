@@ -154,7 +154,7 @@ class EventDrivenTradingBot:
             # Initialize tracker with current portfolio state
             balances = self._broker.get_all_balances()
             krw = float(balances.get("KRW", 0))
-            btc = float(balances.get("BTC", 0))
+            btc = float(balances.get(settings.asset_symbol, 0))
             # Use placeholder price until we get real price from WebSocket
             initial_value = krw + btc * 100_000_000  # Placeholder
             self._tracker.start(initial_value, 100_000_000)
@@ -329,8 +329,9 @@ class EventDrivenTradingBot:
 
                 if btc_price > 0:
                     balances = self._broker.get_all_balances()
+                    asset_sym = get_settings().asset_symbol
                     krw = float(balances.get("KRW", 0))
-                    btc = float(balances.get("BTC", 0))
+                    btc = float(balances.get(asset_sym, 0))
                     btc_value = btc * btc_price
                     total_value = krw + btc_value
 
@@ -491,8 +492,8 @@ def main() -> None:
     parser.add_argument(
         "--symbols",
         nargs="+",
-        default=["KRW-BTC"],
-        help="Trading pairs to monitor",
+        default=[get_settings().upbit_symbol],
+        help="Trading pairs to monitor (default: settings.upbit_symbol)",
     )
     parser.add_argument(
         "--cooldown",

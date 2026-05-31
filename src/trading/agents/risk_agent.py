@@ -42,19 +42,31 @@ class RiskAgent:
         uses actual exchange balance.
 
         Args:
-            market_price: Current BTC price in KRW.
+            market_price: Current asset price in KRW (BTC/ETH/XRP).
 
         Returns:
             PortfolioState for risk calculations.
         """
+        from trading.config import get_settings
+        asset_symbol = get_settings().asset_symbol
+
         # Check if isolated mode is enabled
         isolated_tracker = get_isolated_tracker()
         if isolated_tracker is not None:
-            # Use isolated balance for risk calculations
+            # Use isolated balance for risk calculations.
+            # get_portfolio_value() returns BOTH `asset_value_krw` (new) and
+            # `btc_value_krw` (legacy mirror) — prefer the new key.
             portfolio = isolated_tracker.get_portfolio_value(market_price)
+            asset_value = portfolio.get(
+                "asset_value_krw", portfolio.get("btc_value_krw", 0.0)
+            )
+            asset_balance = portfolio.get(
+                "asset_balance", portfolio.get("btc_balance", 0.0)
+            )
             logger.debug(
                 f"Using isolated balance: KRW={portfolio['krw_balance']:,.0f}, "
-                f"BTC={portfolio['btc_balance']:.8f}, exposure={portfolio['exposure_pct']:.1f}%"
+                f"{asset_symbol}={asset_balance:.8f}, "
+                f"exposure={portfolio['exposure_pct']:.1f}%"
             )
             # Use tracker's midnight-rebased daily P&L (not cumulative pnl_pct)
             # so the RiskManager's daily loss limit only triggers on today's
@@ -62,7 +74,7 @@ class RiskAgent:
             return PortfolioState(
                 total_value_krw=portfolio["total_value_krw"],
                 cash_krw=portfolio["krw_balance"],
-                btc_value_krw=portfolio["btc_value_krw"],
+                asset_value_krw=asset_value,
                 daily_pnl_pct=portfolio.get("daily_pnl_pct", 0.0),
                 unrealized_pnl_pct=portfolio.get("unrealized_pnl_pct", 0.0),
             )
@@ -70,9 +82,9 @@ class RiskAgent:
         # Use actual exchange balance
         balances = self.broker.get_all_balances()
         krw = float(balances.get("KRW", Decimal("0")))
-        btc = float(balances.get("BTC", Decimal("0")))
-        btc_value = btc * market_price
-        total = krw + btc_value
+        asset_qty = float(balances.get(asset_symbol, Decimal("0")))
+        asset_value = asset_qty * market_price
+        total = krw + asset_value
 
         # TODO: Calculate actual daily P&L from trade history
         daily_pnl = 0.0  # Placeholder
@@ -80,7 +92,7 @@ class RiskAgent:
         return PortfolioState(
             total_value_krw=total,
             cash_krw=krw,
-            btc_value_krw=btc_value,
+            asset_value_krw=asset_value,
             daily_pnl_pct=daily_pnl,
             unrealized_pnl_pct=0.0,  # Placeholder
         )
@@ -165,11 +177,14 @@ class RiskAgent:
         """
         ps = self.get_portfolio_state(market_price)
 
-        btc_balance = ps.btc_value_krw / market_price if market_price > 0 else 0
+        # Portfolio TypedDict still uses btc_balance key (Phase 6 renames the
+        # LLM-facing prompt key). Derive from asset_value_krw irrespective of
+        # which asset is held.
+        asset_balance = ps.asset_value_krw / market_price if market_price > 0 else 0
 
         return Portfolio(
             cash_krw=ps.cash_krw,
-            btc_balance=btc_balance,
+            btc_balance=asset_balance,
             avg_entry_price=0.0,  # TODO: Track from trade history
             unrealized_pnl=ps.unrealized_pnl_pct,
             exposure_pct=ps.exposure_pct,

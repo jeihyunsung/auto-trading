@@ -168,12 +168,12 @@ class DecisionValidator:
             if decision["action"] == "BUY" and portfolio.exposure_pct >= max_position:
                 rejection_reason = (
                     f"Position limit reached: exposure={portfolio.exposure_pct:.1f}% >= "
-                    f"max={max_position}%. Cannot increase BTC position."
+                    f"max={max_position}%. Cannot increase position."
                 )
                 rule_checks["position_limit"] = False
                 logger.info(rejection_reason)
-            elif decision["action"] == "SELL" and portfolio.btc_value_krw <= 0:
-                rejection_reason = "No BTC holdings to sell"
+            elif decision["action"] == "SELL" and portfolio.asset_value_krw <= 0:
+                rejection_reason = "No asset holdings to sell"
                 rule_checks["holdings"] = False
                 logger.info(rejection_reason)
 
@@ -185,16 +185,16 @@ class DecisionValidator:
         # Check 6: Minimum order
         # For SELL, calculate based on BTC value; for BUY, based on total/cash
         if decision["action"] == "SELL":
-            trade_amount = (adjusted_size / 100) * portfolio.btc_value_krw
+            trade_amount = (adjusted_size / 100) * portfolio.asset_value_krw
             # If partial sell is below minimum but total BTC value is above minimum,
             # approve anyway - execution will sell full amount
             min_order = self.risk_manager.limits.min_order_krw
-            if trade_amount < min_order and portfolio.btc_value_krw >= min_order:
+            if trade_amount < min_order and portfolio.asset_value_krw >= min_order:
                 ok = True
                 msg = None
                 warnings.append(
                     f"Partial sell {trade_amount:,.0f} KRW < min {min_order:,.0f} KRW, "
-                    f"will sell full amount ({portfolio.btc_value_krw:,.0f} KRW)"
+                    f"will sell full amount ({portfolio.asset_value_krw:,.0f} KRW)"
                 )
             else:
                 ok, msg = self.risk_manager.check_minimum_order(trade_amount)
@@ -278,7 +278,7 @@ class DecisionValidator:
                 suggested_size=decision["suggested_size_pct"],
                 rationale=decision["rationale"],
                 krw_balance=portfolio.cash_krw,
-                btc_balance=portfolio.btc_value_krw / portfolio.total_value_krw if portfolio.total_value_krw > 0 else 0,
+                btc_balance=portfolio.asset_value_krw / portfolio.total_value_krw if portfolio.total_value_krw > 0 else 0,
                 current_exposure=portfolio.exposure_pct,
                 max_position=self.risk_manager.limits.max_position_pct,
                 max_daily_loss=self.risk_manager.limits.max_daily_loss_pct,

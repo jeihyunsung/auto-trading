@@ -37,7 +37,7 @@ class TestPortfolioState:
         state = PortfolioState(
             total_value_krw=1_000_000,
             cash_krw=500_000,
-            btc_value_krw=500_000,
+            asset_value_krw=500_000,
             daily_pnl_pct=0.0,
             unrealized_pnl_pct=0.0,
         )
@@ -49,7 +49,7 @@ class TestPortfolioState:
         state = PortfolioState(
             total_value_krw=0,
             cash_krw=0,
-            btc_value_krw=0,
+            asset_value_krw=0,
             daily_pnl_pct=0.0,
             unrealized_pnl_pct=0.0,
         )
@@ -71,7 +71,7 @@ class TestRiskManager:
         return PortfolioState(
             total_value_krw=1_000_000,
             cash_krw=600_000,
-            btc_value_krw=400_000,
+            asset_value_krw=400_000,
             daily_pnl_pct=-1.0,
             unrealized_pnl_pct=5.0,
         )
@@ -87,7 +87,7 @@ class TestRiskManager:
         portfolio = PortfolioState(
             total_value_krw=1_000_000,
             cash_krw=500_000,
-            btc_value_krw=500_000,
+            asset_value_krw=500_000,
             daily_pnl_pct=-4.0,  # Exceeds 3% limit
             unrealized_pnl_pct=0.0,
         )

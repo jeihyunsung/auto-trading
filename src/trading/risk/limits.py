@@ -35,20 +35,31 @@ class RiskLimits:
 
 @dataclass
 class PortfolioState:
-    """Current portfolio state for risk calculations."""
+    """Current portfolio state for risk calculations.
+
+    Asset-agnostic. The held asset is reflected by `asset_value_krw`
+    (BTC/ETH/XRP) — the legacy `btc_value_krw` name is kept as a
+    read-only alias property so older call sites still compile, but new
+    code should construct PortfolioState with asset_value_krw= directly.
+    """
 
     total_value_krw: float
     cash_krw: float
-    btc_value_krw: float
+    asset_value_krw: float
     daily_pnl_pct: float
     unrealized_pnl_pct: float
 
     @property
     def exposure_pct(self) -> float:
-        """Get current BTC exposure percentage."""
+        """Held-asset exposure as percentage of portfolio."""
         if self.total_value_krw == 0:
             return 0.0
-        return (self.btc_value_krw / self.total_value_krw) * 100
+        return (self.asset_value_krw / self.total_value_krw) * 100
+
+    @property
+    def btc_value_krw(self) -> float:
+        """Legacy alias — reads asset_value_krw. Prefer the new name."""
+        return self.asset_value_krw
 
 
 class RiskManager:
@@ -227,7 +238,7 @@ class RiskManager:
         max_from_trade_limit = (self.limits.max_single_trade_pct / 100) * portfolio.total_value_krw
 
         # Maximum based on holdings
-        max_from_holdings = portfolio.btc_value_krw
+        max_from_holdings = portfolio.asset_value_krw
 
         return max(0, min(max_from_trade_limit, max_from_holdings))
 

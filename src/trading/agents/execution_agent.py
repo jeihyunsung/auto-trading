@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from trading.adapters.upbit import UpbitBrokerAdapter, get_broker
+from trading.config import get_settings
 from trading.core.time import KST
 from trading.core.isolated_balance import get_isolated_tracker
 from trading.core.models import OrderRequest, OrderResult, OrderSide, OrderStatus
@@ -23,15 +24,23 @@ class ExecutionAgent:
         self,
         broker: UpbitBrokerAdapter | None = None,
         log_dir: Path | None = None,
+        asset_symbol: str | None = None,
+        upbit_symbol: str | None = None,
     ):
         """Initialize execution agent.
 
         Args:
             broker: Broker adapter for order execution.
-            log_dir: Directory for trade logs.
+            log_dir: Directory for trade logs (defaults to settings.asset_log_dir
+                so ETH/XRP bots write to per-asset subdirectories).
+            asset_symbol: Ticker held by the bot (default settings.asset_symbol).
+            upbit_symbol: Upbit market symbol (default settings.upbit_symbol).
         """
+        settings = get_settings()
         self.broker = broker or get_broker()
-        self.log_dir = log_dir or Path("logs")
+        self.asset_symbol = asset_symbol or settings.asset_symbol
+        self.upbit_symbol = upbit_symbol or settings.upbit_symbol
+        self.log_dir = log_dir or settings.asset_log_dir
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
     def execute(self, decision: Decision, market_price: float) -> OrderResult | None:
@@ -80,23 +89,27 @@ class ExecutionAgent:
         if isolated_tracker is None:
             balances = self.broker.get_all_balances()
             krw = balances.get("KRW", Decimal("0"))
-            btc = balances.get("BTC", Decimal("0"))
+            asset_held = balances.get(self.asset_symbol, Decimal("0"))
         else:
             krw = Decimal("0")
-            btc = Decimal("0")
+            asset_held = Decimal("0")
 
         # Build order request
-        symbol = "KRW-BTC"
+        symbol = self.upbit_symbol
 
         if action == "BUY":
             if isolated_tracker is not None:
-                # Isolated mode: use only available capital from tracker
+                # Isolated mode: use only available capital from tracker.
+                # get_balances() returns the asset key dynamically
+                # ({'KRW', 'ETH'} for ETH bot, {'KRW', 'BTC'} for BTC bot).
                 isolated_balances = isolated_tracker.get_balances()
                 available_krw = float(isolated_balances.get("KRW", Decimal("0")))
-                isolated_btc = float(isolated_balances.get("BTC", Decimal("0")))
+                isolated_asset = float(
+                    isolated_balances.get(self.asset_symbol, Decimal("0"))
+                )
 
                 # Calculate total portfolio value for correct size calculation
-                total_portfolio = available_krw + (isolated_btc * market_price)
+                total_portfolio = available_krw + (isolated_asset * market_price)
 
                 # size_pct is percentage of TOTAL portfolio, not just KRW
                 amount_krw = total_portfolio * (size_pct / 100)
@@ -131,40 +144,44 @@ class ExecutionAgent:
             min_order_krw = 5000  # Upbit minimum order amount
 
             if isolated_tracker is not None:
-                # Isolated mode: only sell bot's own BTC
+                # Isolated mode: only sell bot's own holdings
                 isolated_balances = isolated_tracker.get_balances()
                 available_krw = float(isolated_balances.get("KRW", Decimal("0")))
-                sellable_btc = float(isolated_balances.get("BTC", Decimal("0")))
+                sellable_asset = float(
+                    isolated_balances.get(self.asset_symbol, Decimal("0"))
+                )
 
-                if sellable_btc <= 0:
+                if sellable_asset <= 0:
                     logger.warning(
-                        "Isolated mode: No BTC to sell (bot has not purchased any)"
+                        f"Isolated mode: No {self.asset_symbol} to sell "
+                        f"(bot has not purchased any)"
                     )
                     return None
 
                 # Calculate total portfolio value for position-based sizing
-                total_portfolio = available_krw + (sellable_btc * market_price)
+                total_portfolio = available_krw + (sellable_asset * market_price)
 
                 # size_pct is percentage of TOTAL portfolio delta to reduce
-                # Convert to BTC quantity
+                # Convert to asset quantity
                 sell_value_krw = total_portfolio * (size_pct / 100)
                 sell_qty = sell_value_krw / market_price if market_price > 0 else 0
 
-                # Cap at sellable BTC
-                if sell_qty > sellable_btc:
-                    sell_qty = sellable_btc
+                # Cap at sellable amount
+                if sell_qty > sellable_asset:
+                    sell_qty = sellable_asset
                     sell_value_krw = sell_qty * market_price
 
-                total_value_krw = sellable_btc * market_price
+                total_value_krw = sellable_asset * market_price
 
                 # Check minimum order amount
                 if sell_value_krw < min_order_krw:
                     if total_value_krw >= min_order_krw:
                         # Sell all if total is above minimum
-                        sell_qty = sellable_btc
+                        sell_qty = sellable_asset
                         logger.info(
-                            f"Isolated SELL: full amount {sell_qty:.8f} BTC "
-                            f"(partial {sell_value_krw:,.0f} KRW < min {min_order_krw} KRW)"
+                            f"Isolated SELL: full amount {sell_qty:.8f} "
+                            f"{self.asset_symbol} (partial {sell_value_krw:,.0f} "
+                            f"KRW < min {min_order_krw} KRW)"
                         )
                     else:
                         logger.warning(
@@ -173,22 +190,23 @@ class ExecutionAgent:
                         return None
                 else:
                     logger.info(
-                        f"Isolated SELL: {sell_qty:.8f} BTC ({sell_value_krw:,.0f} KRW) "
+                        f"Isolated SELL: {sell_qty:.8f} {self.asset_symbol} "
+                        f"({sell_value_krw:,.0f} KRW) "
                         f"({size_pct:.1f}% of portfolio {total_portfolio:,.0f} KRW)"
                     )
             else:
                 # Normal mode: use percentage of total portfolio value
-                btc_balance = float(btc)
+                asset_balance = float(asset_held)
                 krw_balance = float(krw)
-                total_portfolio = krw_balance + (btc_balance * market_price)
+                total_portfolio = krw_balance + (asset_balance * market_price)
 
                 # size_pct is percentage of portfolio delta to reduce
                 sell_value_krw = total_portfolio * (size_pct / 100)
                 sell_qty = sell_value_krw / market_price if market_price > 0 else 0
 
-                # Cap at available BTC
-                if sell_qty > btc_balance:
-                    sell_qty = btc_balance
+                # Cap at available holdings
+                if sell_qty > asset_balance:
+                    sell_qty = asset_balance
 
             request = OrderRequest(
                 symbol=symbol,
@@ -251,28 +269,29 @@ class ExecutionAgent:
             krw_spent = filled_qty * avg_price
             ok = tracker.record_buy(
                 krw_spent=krw_spent,
-                btc_received=filled_qty,
+                asset_received=filled_qty,
                 fee_krw=fee,
             )
             if not ok:
                 logger.error(
                     f"Isolated tracker BUY record FAILED (insufficient tracker KRW). "
                     f"Real Upbit balance changed but tracker diverges. "
-                    f"krw_spent={krw_spent}, btc_received={filled_qty}, fee={fee}"
+                    f"krw_spent={krw_spent}, asset_received={filled_qty}, fee={fee}"
                 )
         elif action == "SELL":
             # KRW received = (qty * price) - fee
             krw_received = (filled_qty * avg_price) - fee
             ok = tracker.record_sell(
-                btc_sold=filled_qty,
+                asset_sold=filled_qty,
                 krw_received=krw_received,
                 fee_krw=fee,
             )
             if not ok:
                 logger.error(
-                    f"Isolated tracker SELL record FAILED (insufficient tracker BTC). "
-                    f"Real Upbit balance changed but tracker diverges. "
-                    f"btc_sold={filled_qty}, krw_received={krw_received}, fee={fee}"
+                    f"Isolated tracker SELL record FAILED (insufficient tracker "
+                    f"{self.asset_symbol}). Real Upbit balance changed but "
+                    f"tracker diverges. "
+                    f"asset_sold={filled_qty}, krw_received={krw_received}, fee={fee}"
                 )
 
     def _log_trade(

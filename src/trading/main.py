@@ -192,8 +192,9 @@ def run_continuous(
 
                 if btc_price > 0:
                     balances = broker.get_all_balances()
+                    asset_sym = get_settings().asset_symbol
                     krw = float(balances.get("KRW", 0))
-                    btc = float(balances.get("BTC", 0))
+                    btc = float(balances.get(asset_sym, 0))
                     btc_value = btc * btc_price
                     total_value = krw + btc_value
 
