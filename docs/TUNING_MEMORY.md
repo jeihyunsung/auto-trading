@@ -16,7 +16,7 @@
 |---|---|
 | Hysteresis | [#h1](#h1) [#h2](#h2) [#h3](#h3) [#h4](#h4) |
 | Stop-loss / Take-profit | [#s1](#s1) [#s2](#s2) [#t1](#t1) |
-| LLM behavior | [#l1](#l1) [#l2](#l2) [#l3](#l3) [#l4](#l4) |
+| LLM behavior | [#l1](#l1) [#l2](#l2) [#l3](#l3) [#l4](#l4) [#l5](#l5) [#l6](#l6) |
 | Operations / Infra | [#o1](#o1) [#o2](#o2) [#o3](#o3) |
 | PositionSizer | [#p1](#p1) |
 | RiskValidator | [#r1](#r1) |
@@ -24,6 +24,8 @@
 ## Current Open Questions
 
 - [#l4](#l4) Volume spike false positive — 24h 약세 중에도 volume 13.2x → BUY 발생. 충분한 데이터 없음.
+- ~~[#l5](#l5) BUY 정체~~ — **자체 해소 (5/30 04:53)**. RSI 47.7로 하락하며 정상 BUY 발동. 옵션 A는 진입을 *지연*만 하고 *금지* 안 함을 검증.
+- [#l6](#l6) **RSI 22 극단 과매도 + bearish MTF → HOLD** (5/31). Trend Confirmation Rule이 작동. 며칠 후 결과(bottom vs 추가 하락)로 정책 평가.
 - Take-profit ([#t1](#t1)) 실전 발동 0회 — +1.5% 도달 케이스 부재. 시장 환경 영향.
 
 ## Active Settings (요약)
@@ -162,6 +164,51 @@
   - 13분 후 SELL conf 0.77 → delta +0.17 > 0.15 → 통과 ✅
   - 만약 cap 없었으면: BUY conf 0.77 → SELL 0.92 이상 필요 → 차단됨
 - **Codex 경고**: "13 trades is overfit territory" — 더 많은 데이터로 검증 필요.
+
+### #l6 — RSI 극단 과매도 (≤25) + bearish MTF → BUY 보류 {#l6}
+
+- **Date**: 2026-05-31 (관찰 16:00~17:00 KST)
+- **Symptom**: BTC가 109.3M에서 점진 하락. RSI가 30.6 → 27.3 → 22.1로 떨어졌으나 33개 결정 모두 HOLD. 신규 BUY 0회.
+- **Evidence**:
+  ```
+  15:53 RSI=30.6, MTF [Be,Be,Be,Be] (4/4 bearish) → HOLD conf 0.60
+  16:24 RSI=27.3, MTF bearish → HOLD conf 0.60
+  16:56 RSI=22.1, MTF bearish → HOLD conf 0.60 ← 극단적 과매도인데 HOLD
+  Position sizing: target=25%, current=23.1%, delta=+1.9% → HOLD (delta < 5% 임계)
+  Hysteresis blocked: BUY -> HOLD (delta=-0.05 < 0.07)
+  ```
+- **Root cause**: Trend Confirmation Rule (LLM prompt) — "RSI oversold AND trend bearish이면 falling knife 회피 → HOLD". 5/27 -4.7% 폭락 직전과 같은 패턴 신호.
+- **추가 차단 요인**:
+  1. Position sizing이 current 23.1% vs target 25% → delta 1.9%만 부족 → HOLD trade=False
+  2. 5/30 20:09 BUY conf 0.65가 Hysteresis anchor → 후속 BUY 0.72+ 필요
+- **Status**: 미수정 — 의도된 보수성.
+  - 만약 여기가 bottom + 반등이면: BUY 미스 (lost opportunity)
+  - 만약 추가 하락이면: 봇 보호 ([#s1] -2% stop-loss 대기)
+- **Trade-off**: [#l3] cap이 RSI 60+에서 가짜 BUY 막듯, Trend Confirmation Rule이 RSI 25-에서 falling knife 막음. 양극단 모두 보수적.
+- **Possible fix candidates (검토만)**:
+  - 강한 oversold (RSI ≤ 25) + 다른 reversal 신호 (예: MACD 양수 전환, 5분봉 trend 변화) 조합 시 일부 진입 허용
+  - 그러나 [#l4] volume spike false positive처럼 noise BUY 위험
+- **Related**: [#l5](#l5) (RSI 60+에서 HOLD), [#l1](#l1) (prompt rule), [#s1](#s1) (stop-loss 백업)
+
+### #l5 — BUY signal 정체: 상승장 진입 실패 (옵션 A 부작용 본격 발현) {#l5}
+
+- **Date**: 2026-05-29 (관찰 09:18~18:21 KST)
+- **Symptom**: BTC +0.96% 상승 중. 봇 노출 3% (보유 0.000274 BTC, +0.93% 평가이익). 36개 결정 모두 HOLD. 신규 BUY 0회.
+- **Evidence**:
+  ```
+  PositionSizer: target=25%, current=3%, delta=+22%, action=BUY, trade=True (LLM 미사용 기준)
+  LLM 17:19: RSI=62.6, Trend=bullish → HOLD conf 0.60 ("매수 확신 낮음")
+  LLM 17:51: RSI=64.2, Trend=bullish → HOLD conf 0.60 ("과매수 근접, 매수 확신 낮음")
+  LLM 18:21: RSI=70.6, Trend=bullish → HOLD conf 0.60 ("과매수 근접 단기 조정 가능성")
+  MTF 09:18~18:21: [1d=Be, 1h=Bu, 4h=Be, 5m=Bu] → neutral (0/4 aligned, adj=-0.10)
+  ```
+- **Root cause**: **옵션 A([#l3])의 예상된 부작용**. RSI 60+에서 BUY conf cap=0.65 + prompt 강화([#l1]) "RSI 65+는 single signal로 BUY 불가" → LLM 자체가 0.6 이상 BUY 권고 안 함. MTF가 mixed (1d/4h bearish 잔재 + 1h/5m bullish)라 정렬 보너스(+0.1) 못 받음 — 오히려 -0.10 페널티.
+- **User feedback**: "가격이 점점 상승하고 있는데 액션이 없네" — 사용자가 [#l3] 도입 시 우려한 "강한 추세장 진입 사이즈 작아짐" 정확히 발현
+- **Outcome (2026-05-30 04:53 KST)**: 자체 해소 — BTC 가격이 새벽에 약간 하락하며 RSI 47.7로 떨어진 시점 LLM이 conf 0.67 BUY 권고 → 0.000910 BTC @ 108,884,000 매수. **옵션 A([#l3])의 cap이 RSI > 60 구간에만 적용된다는 점 검증됨** (RSI 47.7은 cap 미적용, PositionSizer 0.6-0.7 tier 25% target).
+- **검증된 동작**: 옵션 A는 진입을 *지연*시킬 뿐 *금지*하지 않음. RSI가 30~55 구간으로 내려오는 자연스러운 조정 + bullish trend 동시 발생하면 정상 BUY 가능.
+- **수정 결정**: **fix 안 함** — 시장이 자체적으로 RSI를 진입 가능 영역으로 가져옴. 며칠 더 관찰 후 BUY 빈도 정상 범위인지 판단.
+- **Lesson**: 옵션 A는 "RSI 60+에서 자신감 큰 추격 매수"만 막는다. 정상 가격 조정 시 진입은 작동.
+- **Related**: [#l3](#l3) (cap 자체), [#h1](#h1) (cap 도입 원인이었던 4h stalemate), [#l1](#l1) (prompt confidence 강화)
 
 ### #l4 — Volume spike false positive (5/28 13분 round-trip) {#l4}
 
