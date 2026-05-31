@@ -49,6 +49,7 @@ def load_historical_derivatives(
     end: datetime,
     period: str = "1h",
     provider: BinanceFuturesDataProvider | None = None,
+    symbol: str | None = None,
 ) -> dict[datetime, DerivativesData]:
     """Fetch derivatives time series and return a timestamp-indexed dict.
 
@@ -56,13 +57,22 @@ def load_historical_derivatives(
         start: Window start (inclusive).
         end: Window end (inclusive).
         period: OI/L_S sampling period.
-        provider: Optional provider (creates new instance if None).
+        provider: Optional provider. If None, one is built for `symbol`
+            (or settings.binance_futures_symbol). Critical for multi-asset
+            backtests: omitting both used to silently fetch BTCUSDT for any
+            caller.
+        symbol: Futures symbol (e.g., 'ETHUSDT'). Ignored if `provider`
+            is supplied. Defaults to settings.binance_futures_symbol.
 
     Returns:
         Dict {timestamp -> DerivativesData} sorted by timestamp.
         Empty dict if all fetches fail.
     """
-    provider = provider or BinanceFuturesDataProvider()
+    if provider is None:
+        if symbol is None:
+            from trading.config import get_settings
+            symbol = get_settings().binance_futures_symbol
+        provider = BinanceFuturesDataProvider(symbol=symbol)
     start_ms = int(start.timestamp() * 1000)
     end_ms = int(end.timestamp() * 1000)
 

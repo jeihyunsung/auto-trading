@@ -419,27 +419,46 @@ class BinanceFuturesDataProvider:
         return "neutral"
 
 
-# Module-level singleton
-_provider: BinanceFuturesDataProvider | None = None
+# Per-symbol provider cache (was singleton — broke ETH/XRP backtests by
+# silently returning BTC derivatives data for any caller).
+_providers: dict[str, BinanceFuturesDataProvider] = {}
 
 
-def get_binance_futures_provider() -> BinanceFuturesDataProvider:
-    """Get global Binance Futures provider instance.
-
-    Returns:
-        Singleton BinanceFuturesDataProvider instance.
-    """
-    global _provider
-    if _provider is None:
-        _provider = BinanceFuturesDataProvider()
-    return _provider
-
-
-def set_binance_futures_provider(provider: BinanceFuturesDataProvider | None) -> None:
-    """Set global Binance Futures provider instance.
+def get_binance_futures_provider(symbol: str | None = None) -> BinanceFuturesDataProvider:
+    """Get a Binance Futures provider for the requested symbol.
 
     Args:
-        provider: Provider instance or None to clear.
+        symbol: Futures symbol (e.g., 'BTCUSDT', 'ETHUSDT'). If None,
+            derived from settings.binance_futures_symbol so each bot
+            instance gets its own asset provider.
+
+    Returns:
+        Cached BinanceFuturesDataProvider for that symbol.
     """
-    global _provider
-    _provider = provider
+    if symbol is None:
+        from trading.config import get_settings
+        symbol = get_settings().binance_futures_symbol
+
+    if symbol not in _providers:
+        _providers[symbol] = BinanceFuturesDataProvider(symbol=symbol)
+    return _providers[symbol]
+
+
+def set_binance_futures_provider(
+    provider: BinanceFuturesDataProvider | None,
+    symbol: str | None = None,
+) -> None:
+    """Override or clear the cached provider for a symbol (mainly for tests).
+
+    Args:
+        provider: Provider instance, or None to evict.
+        symbol: Symbol to set. If None, derived from settings.
+    """
+    if symbol is None:
+        from trading.config import get_settings
+        symbol = get_settings().binance_futures_symbol
+
+    if provider is None:
+        _providers.pop(symbol, None)
+    else:
+        _providers[symbol] = provider

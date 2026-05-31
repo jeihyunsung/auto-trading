@@ -116,13 +116,26 @@ class CoinMarketCapProvider:
         return quotes
 
     def get_btc_quote(self) -> CMCQuote | None:
-        """Get Bitcoin quote (convenience method).
+        """Get Bitcoin quote (convenience method, kept for callers that still
+        want BTC explicitly — backtests/dashboards).
 
         Returns:
             CMCQuote for BTC or None if not available.
         """
         quotes = self.get_quotes(["BTC"])
         return quotes.get("BTC")
+
+    def get_asset_quote(self, symbol: str) -> CMCQuote | None:
+        """Get quote for an arbitrary asset symbol.
+
+        Args:
+            symbol: Ticker (e.g., 'BTC', 'ETH', 'XRP').
+
+        Returns:
+            CMCQuote for the asset or None if not available.
+        """
+        quotes = self.get_quotes([symbol])
+        return quotes.get(symbol)
 
     def get_global_metrics(self) -> GlobalMetrics:
         """Get global cryptocurrency market metrics.

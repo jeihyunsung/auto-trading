@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 
 from trading.adapters.binance_futures import get_binance_futures_provider
+from trading.config import get_settings
 from trading.core.time import KST
 from trading.adapters.coinmarketcap import CoinMarketCapProvider
 from trading.adapters.upbit import UpbitBrokerAdapter
@@ -42,34 +43,40 @@ class MarketAgent:
         self.broker = broker or UpbitBrokerAdapter()
         self.cmc = cmc or CoinMarketCapProvider()
         self.anomaly_detector = anomaly_detector or MarketAnomalyDetector()
-        self.binance_futures = get_binance_futures_provider()
+        settings = get_settings()
+        self.asset_symbol = settings.asset_symbol
+        self.default_symbol = settings.upbit_symbol
+        self.binance_futures = get_binance_futures_provider(
+            settings.binance_futures_symbol
+        )
 
-    def collect(self, symbol: str = "KRW-BTC") -> MarketData:
+    def collect(self, symbol: str | None = None) -> MarketData:
         """Collect market data for symbol.
 
         Args:
-            symbol: Trading pair (default KRW-BTC).
+            symbol: Trading pair (default: settings.upbit_symbol).
 
         Returns:
             MarketData with current market state.
         """
+        symbol = symbol or self.default_symbol
         logger.info(f"Collecting market data for {symbol}")
 
         # Get market snapshot from Upbit
         snapshot = self.broker.get_market_snapshot(symbol)
 
-        # Get CMC data for additional context
+        # Get CMC data for additional context (per-asset, not always BTC)
         percent_change_1h = 0.0
         percent_change_24h = snapshot.change_24h_pct or 0.0
 
         if self.cmc.is_available:
             try:
-                btc_quote = self.cmc.get_btc_quote()
-                if btc_quote:
-                    percent_change_1h = btc_quote.percent_change_1h
+                asset_quote = self.cmc.get_asset_quote(self.asset_symbol)
+                if asset_quote:
+                    percent_change_1h = asset_quote.percent_change_1h
                     # Use CMC 24h change if Upbit's is not available
                     if percent_change_24h == 0.0:
-                        percent_change_24h = btc_quote.percent_change_24h
+                        percent_change_24h = asset_quote.percent_change_24h
             except Exception as e:
                 logger.warning(f"CMC data collection failed: {e}")
 
@@ -103,15 +110,16 @@ class MarketAgent:
             percent_change_24h=percent_change_24h,
         )
 
-    def detect_anomalies(self, symbol: str = "KRW-BTC") -> list[dict]:
+    def detect_anomalies(self, symbol: str | None = None) -> list[dict]:
         """Detect market anomalies.
 
         Args:
-            symbol: Trading pair.
+            symbol: Trading pair (default: settings.upbit_symbol).
 
         Returns:
             List of anomaly dicts.
         """
+        symbol = symbol or self.default_symbol
         snapshot = self.broker.get_market_snapshot(symbol)
         anomalies = self.anomaly_detector.detect(snapshot)
 
@@ -124,18 +132,19 @@ class MarketAgent:
             for a in anomalies
         ]
 
-    def collect_portfolio(self, symbol: str = "KRW-BTC") -> dict:
+    def collect_portfolio(self, symbol: str | None = None) -> dict:
         """Collect current portfolio state.
 
         Uses isolated balance tracker if available (isolated mode),
         otherwise falls back to actual Upbit account balance.
 
         Args:
-            symbol: Trading pair for price reference.
+            symbol: Trading pair for price reference (default: settings.upbit_symbol).
 
         Returns:
             Portfolio dict with cash_krw, btc_balance, exposure_pct, etc.
         """
+        symbol = symbol or self.default_symbol
         try:
             # Get current price for calculations
             snapshot = self.broker.get_market_snapshot(symbol)
@@ -167,7 +176,7 @@ class MarketAgent:
                 # Fallback to actual Upbit balance
                 balances = self.broker.get_all_balances()
                 krw = float(balances.get("KRW", 0))
-                btc = float(balances.get("BTC", 0))
+                btc = float(balances.get(self.asset_symbol, 0))
 
                 btc_value = btc * current_price
                 total_value = krw + btc_value
@@ -237,16 +246,17 @@ class MarketAgent:
 
     def collect_multi_timeframe_ohlcv(
         self,
-        symbol: str = "KRW-BTC",
+        symbol: str | None = None,
     ) -> MultiTimeframeOHLCV:
         """Collect OHLCV data for multiple timeframes.
 
         Args:
-            symbol: Trading pair.
+            symbol: Trading pair (default: settings.upbit_symbol).
 
         Returns:
             MultiTimeframeOHLCV with data for all timeframes.
         """
+        symbol = symbol or self.default_symbol
         mtf_ohlcv: MultiTimeframeOHLCV = {}
 
         # Timeframe configurations: (interval, count)

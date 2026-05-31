@@ -9,6 +9,7 @@ from trading.backtest.data import HistoricalDataLoader
 from trading.backtest.engine import BacktestConfig, BacktestEngine
 from trading.backtest.metrics import PerformanceMetrics
 from trading.backtest.report import BacktestReporter
+from trading.config import get_settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,11 +45,12 @@ def main() -> None:
     )
 
     # Data options
+    default_symbol = get_settings().upbit_symbol
     parser.add_argument(
         "--symbol",
         type=str,
-        default="KRW-BTC",
-        help="거래쌍 심볼",
+        default=default_symbol,
+        help="거래쌍 심볼 (기본값은 TRADING_ASSET 환경변수에서 derive)",
     )
     parser.add_argument(
         "--days",
@@ -92,6 +94,15 @@ def main() -> None:
         "--hysteresis",
         action="store_true",
         help="Hysteresis 적용 (액션 진동 방지)",
+    )
+    parser.add_argument(
+        "--load-derivatives",
+        action="store_true",
+        help=(
+            "Binance Futures 과거 OI/L_S/funding 데이터를 자산 심볼에 맞게 "
+            "로드. 미설정 시 derivatives=None (BTC 데이터로 fallback되던 "
+            "기존 버그 회피)."
+        ),
     )
     parser.add_argument(
         "--confidence-threshold",
@@ -170,7 +181,24 @@ def main() -> None:
         use_hysteresis=args.hysteresis,
         confidence_threshold=args.confidence_threshold,
         max_position_pct=args.max_position,
+        symbol=args.symbol,
     )
+
+    # Pre-load derivatives history for the asset (Binance Futures public API).
+    # Without this, derivatives=None for every cycle.
+    derivatives_by_ts: dict | None = None
+    if args.load_derivatives:
+        from trading.backtest.derivatives_loader import load_historical_derivatives
+        from trading.config import get_settings as _gs
+        settings = _gs()
+        futures_symbol = settings.binance_futures_symbol
+        start_ts = df.index.min().to_pydatetime()
+        end_ts = df.index.max().to_pydatetime()
+        print(f"\n📡 Binance Futures derivatives 로드 중... ({futures_symbol})")
+        derivatives_by_ts = load_historical_derivatives(
+            start_ts, end_ts, period="1h", symbol=futures_symbol
+        )
+        print(f"  ✅ {len(derivatives_by_ts)}개 스냅샷 로드 완료")
 
     print("\n⚙️ 설정:")
     print(f"  초기 자본: {config.initial_capital_krw:,.0f} KRW")
@@ -183,7 +211,7 @@ def main() -> None:
 
     # Run backtest
     print("\n🚀 백테스트 실행 중...")
-    engine = BacktestEngine(config)
+    engine = BacktestEngine(config, derivatives_by_ts=derivatives_by_ts)
     result = engine.run(data_points, progress_callback=progress_bar)
 
     # Calculate metrics

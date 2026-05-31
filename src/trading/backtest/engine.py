@@ -91,6 +91,11 @@ class BacktestConfig:
     use_hysteresis: bool = False
     confidence_threshold: float = 0.5
     max_position_pct: float = 50.0
+    # Symbol identifies which asset is being backtested. Used to label
+    # market.symbol in the synthetic TradingState so the LLM/rule decisions
+    # are made in the correct asset context. Default derived from settings
+    # so legacy callers (BTC) continue to work without changes.
+    symbol: str | None = None
 
 
 @dataclass
@@ -157,6 +162,9 @@ class BacktestEngine:
                 LLM decisions overly conservative in backtests.
         """
         self.config = config or BacktestConfig()
+        if self.config.symbol is None:
+            from trading.config import get_settings
+            self.config.symbol = get_settings().upbit_symbol
         self.indicator_agent = IndicatorAgent()
         self.decision_agent = DecisionAgent()
         self._derivatives_by_ts = derivatives_by_ts or {}
@@ -317,7 +325,7 @@ class BacktestEngine:
 
         # Build market data
         market_data = MarketData(
-            symbol="KRW-BTC",
+            symbol=self.config.symbol,
             current_price=data_point.current_price,
             ohlcv=[
                 {
