@@ -53,6 +53,31 @@ class Settings(BaseSettings):
         default="paper", description="Trading mode: paper or live"
     )
 
+    # Trading asset (multi-asset support)
+    trading_asset: Literal["BTC", "ETH", "XRP"] = Field(
+        default="BTC",
+        description=(
+            "Asset to trade. Each bot instance owns a single asset. "
+            "BTC keeps legacy file paths (logs/, isolated_balance.json); "
+            "ETH/XRP use per-asset subdirectories and separate state files."
+        ),
+    )
+
+    @property
+    def upbit_symbol(self) -> str:
+        """Upbit market symbol (e.g., 'KRW-BTC')."""
+        return f"KRW-{self.trading_asset}"
+
+    @property
+    def binance_futures_symbol(self) -> str:
+        """Binance Futures perpetual symbol (e.g., 'BTCUSDT')."""
+        return f"{self.trading_asset}USDT"
+
+    @property
+    def asset_symbol(self) -> str:
+        """Asset ticker (e.g., 'BTC'). Convenience alias for trading_asset."""
+        return self.trading_asset
+
     # Risk management
     max_daily_loss_pct: float = Field(
         default=3.0, ge=0.0, le=100.0, description="Maximum daily loss percentage"
@@ -74,7 +99,31 @@ class Settings(BaseSettings):
 
     # Logging
     log_level: str = Field(default="INFO", description="Logging level")
-    log_dir: Path = Field(default=Path("logs"), description="Directory for log files")
+    log_dir: Path = Field(default=Path("logs"), description="Base log directory")
+
+    @property
+    def asset_log_dir(self) -> Path:
+        """Per-asset log directory.
+
+        BTC keeps legacy path (settings.log_dir) for backward compatibility.
+        ETH/XRP use settings.log_dir / asset_lower to avoid co-mingling
+        trades/decisions/indicators JSONL files across instances.
+        """
+        if self.trading_asset == "BTC":
+            return self.log_dir
+        return self.log_dir / self.trading_asset.lower()
+
+    @property
+    def isolated_balance_path(self) -> Path:
+        """State file path for IsolatedBalanceTracker.
+
+        BTC keeps legacy 'isolated_balance.json' under log_dir for
+        backward compatibility (the live bot is already using it).
+        ETH/XRP use 'isolated_balance_<asset>.json' under asset_log_dir.
+        """
+        if self.trading_asset == "BTC":
+            return self.log_dir / "isolated_balance.json"
+        return self.asset_log_dir / f"isolated_balance_{self.trading_asset.lower()}.json"
 
     # LLM call frequency controls
     llm_cache_ttl_seconds: int = Field(
