@@ -168,7 +168,7 @@ class MarketAgent:
                 }
                 logger.info(
                     f"Portfolio (isolated): KRW={portfolio['cash_krw']:,.0f}, "
-                    f"BTC={portfolio['btc_balance']:.8f}, "
+                    f"{self.asset_symbol}={portfolio['btc_balance']:.8f}, "
                     f"Exposure={portfolio['exposure_pct']:.1f}%, "
                     f"Unrealized P&L={portfolio['unrealized_pnl']:+.2f}%"
                 )
@@ -191,7 +191,8 @@ class MarketAgent:
                     "unrealized_pnl": 0.0,
                 }
                 logger.info(
-                    f"Portfolio: KRW={krw:,.0f}, BTC={btc:.8f}, "
+                    f"Portfolio: KRW={krw:,.0f}, "
+                    f"{self.asset_symbol}={btc:.8f}, "
                     f"Exposure={exposure_pct:.1f}%"
                 )
 

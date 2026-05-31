@@ -103,24 +103,30 @@ def run_continuous(
         hysteresis = HysteresisManager(hysteresis_config)
         set_hysteresis_manager(hysteresis)
 
-    # Initialize performance tracker (uses shared broker)
+    # Initialize performance tracker (uses shared broker).
+    # log_dir = settings.asset_log_dir so ETH/XRP bots write performance
+    # metrics, daily reports, and portfolio snapshots to per-asset
+    # subdirectories (BTC keeps legacy logs/).
     tracker: PerformanceTracker | None = None
     broker = get_broker()  # Shared broker instance for all agents
     if performance_tracking:
         tracker = PerformanceTracker(
             PerformanceConfig(
                 snapshot_interval_minutes=max(1, interval_seconds // 60),
-                log_dir=settings.log_dir,
+                log_dir=settings.asset_log_dir,
             )
         )
         set_performance_tracker(tracker)
 
-    # Initialize isolated balance tracker if enabled
+    # Initialize isolated balance tracker if enabled.
+    # Path comes from settings.isolated_balance_path so BTC keeps the legacy
+    # logs/isolated_balance.json while ETH/XRP route to per-asset files —
+    # without this, an ETH bot would overwrite BTC's holdings.
     isolated_tracker: IsolatedBalanceTracker | None = None
     if settings.isolated_mode:
         isolated_tracker = IsolatedBalanceTracker(
             initial_capital_krw=settings.isolated_capital_krw,
-            state_file=settings.log_dir / "isolated_balance.json",
+            state_file=settings.isolated_balance_path,
         )
         if reset_isolated:
             from decimal import Decimal
@@ -134,13 +140,13 @@ def run_continuous(
         set_isolated_tracker(isolated_tracker)
 
     # Initialize history writers for dashboard
-    decision_writer = DecisionHistoryWriter(settings.log_dir)
+    decision_writer = DecisionHistoryWriter(settings.asset_log_dir)
     set_decision_writer(decision_writer)
 
-    derivatives_writer = DerivativesHistoryWriter(settings.log_dir)
+    derivatives_writer = DerivativesHistoryWriter(settings.asset_log_dir)
     set_derivatives_writer(derivatives_writer)
 
-    indicator_writer = IndicatorHistoryWriter(settings.log_dir)
+    indicator_writer = IndicatorHistoryWriter(settings.asset_log_dir)
     set_indicator_writer(indicator_writer)
 
     logger.info("=" * 60)
@@ -391,7 +397,7 @@ def main():
         if settings.isolated_mode:
             isolated_tracker = IsolatedBalanceTracker(
                 initial_capital_krw=settings.isolated_capital_krw,
-                state_file=settings.log_dir / "isolated_balance.json",
+                state_file=settings.isolated_balance_path,
             )
             if args.reset_isolated:
                 from decimal import Decimal

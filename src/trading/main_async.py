@@ -146,7 +146,7 @@ class EventDrivenTradingBot:
             self._tracker = PerformanceTracker(
                 PerformanceConfig(
                     snapshot_interval_minutes=1,
-                    log_dir=settings.log_dir,
+                    log_dir=settings.asset_log_dir,
                 )
             )
             set_performance_tracker(self._tracker)
@@ -160,11 +160,11 @@ class EventDrivenTradingBot:
             self._tracker.start(initial_value, 100_000_000)
 
         # Configure history writers for dashboard
-        decision_writer = DecisionHistoryWriter(settings.log_dir)
+        decision_writer = DecisionHistoryWriter(settings.asset_log_dir)
         set_decision_writer(decision_writer)
-        indicator_writer = IndicatorHistoryWriter(settings.log_dir)
+        indicator_writer = IndicatorHistoryWriter(settings.asset_log_dir)
         set_indicator_writer(indicator_writer)
-        derivatives_writer = DerivativesHistoryWriter(settings.log_dir)
+        derivatives_writer = DerivativesHistoryWriter(settings.asset_log_dir)
         set_derivatives_writer(derivatives_writer)
 
         logger.info("=" * 60)
