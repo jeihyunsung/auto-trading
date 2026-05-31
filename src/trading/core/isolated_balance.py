@@ -30,11 +30,18 @@ def _now_kst_iso() -> str:
 class IsolatedBalance:
     """Isolated balance state for bot operation.
 
+    Tracks the bot's sandboxed capital for a single asset. The original
+    schema hard-coded BTC; the new schema stores asset_balance + asset_symbol
+    so the same class can back ETH/XRP bot instances. Reads remain
+    backward-compatible with existing BTC `isolated_balance.json` files
+    via from_dict's dual-key fallback.
+
     Attributes:
         krw: Available KRW balance for the bot.
-        btc: BTC balance acquired by the bot.
+        asset_balance: Asset holdings (BTC/ETH/XRP) acquired by the bot.
+        asset_symbol: Ticker for the held asset (default "BTC").
         initial_capital: Starting capital in KRW.
-        total_invested: Total KRW invested in BTC.
+        total_invested: Total KRW invested in the asset.
         total_fees: Total fees paid.
         created_at: When isolated tracking started (KST).
         last_updated: Last update timestamp (KST).
@@ -43,8 +50,9 @@ class IsolatedBalance:
     """
 
     krw: Decimal
-    btc: Decimal
+    asset_balance: Decimal
     initial_capital: Decimal
+    asset_symbol: str = "BTC"
     total_invested: Decimal = Decimal("0")
     total_fees: Decimal = Decimal("0")
     created_at: str = field(default_factory=_now_kst_iso)
@@ -52,11 +60,31 @@ class IsolatedBalance:
     daily_start_value: Decimal = Decimal("0")  # 0 means "not yet seeded"
     daily_start_date: str = ""
 
+    @property
+    def btc(self) -> Decimal:
+        """Legacy alias kept so existing call sites still compile until
+        Phase 3 sweeps execution_agent/market_agent."""
+        return self.asset_balance
+
+    @btc.setter
+    def btc(self, value: Decimal) -> None:
+        self.asset_balance = value
+
     def to_dict(self) -> dict:
-        """Convert to dictionary for serialization."""
+        """Convert to dictionary for serialization.
+
+        Writes both the new asset_balance/asset_symbol fields AND the legacy
+        "btc" mirror so that:
+          - older bot binaries (if rolled back) still see "btc".
+          - dashboards / external readers expecting "btc" don't break.
+        The legacy mirror can be dropped once the live BTC bot has run
+        through one save cycle on the new code.
+        """
         return {
             "krw": str(self.krw),
-            "btc": str(self.btc),
+            "asset_balance": str(self.asset_balance),
+            "asset_symbol": self.asset_symbol,
+            "btc": str(self.asset_balance),  # legacy mirror — TODO: remove after burn-in
             "initial_capital": str(self.initial_capital),
             "total_invested": str(self.total_invested),
             "total_fees": str(self.total_fees),
@@ -68,10 +96,19 @@ class IsolatedBalance:
 
     @classmethod
     def from_dict(cls, data: dict) -> "IsolatedBalance":
-        """Create from dictionary."""
+        """Create from dictionary with backward-compatible dual-key read.
+
+        Live BTC bot state files only have the legacy "btc" key. New
+        files (and resaved BTC files) have "asset_balance" + "asset_symbol".
+        from_dict prefers new keys, falls back to legacy ones.
+        """
+        # Prefer new key; fall back to legacy "btc" so BTC live state loads.
+        asset_balance_str = data.get("asset_balance", data.get("btc", "0"))
+        asset_symbol = data.get("asset_symbol", "BTC")
         return cls(
             krw=Decimal(data["krw"]),
-            btc=Decimal(data["btc"]),
+            asset_balance=Decimal(asset_balance_str),
+            asset_symbol=asset_symbol,
             initial_capital=Decimal(data["initial_capital"]),
             total_invested=Decimal(data.get("total_invested", "0")),
             total_fees=Decimal(data.get("total_fees", "0")),
@@ -93,12 +130,17 @@ class IsolatedBalanceTracker:
         self,
         initial_capital_krw: float | None = None,
         state_file: Path | None = None,
+        asset_symbol: str | None = None,
     ):
         """Initialize isolated balance tracker.
 
         Args:
             initial_capital_krw: Starting capital (uses config if None).
-            state_file: File to persist state (uses default if None).
+            state_file: File to persist state. If None, derived from
+                settings.isolated_balance_path so BTC keeps the legacy
+                logs/isolated_balance.json while ETH/XRP get per-asset files.
+            asset_symbol: Override asset (e.g., 'ETH', 'XRP'). If None,
+                taken from settings.asset_symbol.
 
         Raises:
             RuntimeError: If another process already holds the tracker lock
@@ -109,7 +151,8 @@ class IsolatedBalanceTracker:
         self._initial_capital = Decimal(
             str(initial_capital_krw or settings.isolated_capital_krw)
         )
-        self._state_file = state_file or settings.log_dir / "isolated_balance.json"
+        self._asset_symbol = asset_symbol or settings.asset_symbol
+        self._state_file = state_file or settings.isolated_balance_path
         self._balance: IsolatedBalance | None = None
         self._lock_file = None  # Held for tracker lifetime
 
@@ -169,22 +212,41 @@ class IsolatedBalanceTracker:
                 with open(self._state_file) as f:
                     data = json.load(f)
                 self._balance = IsolatedBalance.from_dict(data)
+                # Ensure asset_symbol on loaded state matches the tracker's
+                # configured asset. Loaded BTC files have asset_symbol="BTC";
+                # a mismatch would mean the operator pointed an ETH bot at
+                # a BTC state file by accident — fail loud rather than
+                # silently rewriting the holdings under a different ticker.
+                if self._balance.asset_symbol != self._asset_symbol:
+                    raise RuntimeError(
+                        f"Isolated state file {self._state_file} holds "
+                        f"{self._balance.asset_symbol} but tracker was "
+                        f"initialized for {self._asset_symbol}. Refusing "
+                        f"to mix assets. Point to a different state file "
+                        f"or reset."
+                    )
                 logger.info(
                     f"Loaded isolated balance: KRW={self._balance.krw:,.0f}, "
-                    f"BTC={self._balance.btc:.8f}"
+                    f"{self._balance.asset_symbol}={self._balance.asset_balance:.8f}"
                 )
                 return
+            except RuntimeError:
+                raise
             except Exception as e:
                 logger.warning(f"Failed to load isolated balance: {e}")
 
         # Create new state
         self._balance = IsolatedBalance(
             krw=self._initial_capital,
-            btc=Decimal("0"),
+            asset_balance=Decimal("0"),
+            asset_symbol=self._asset_symbol,
             initial_capital=self._initial_capital,
         )
         self._save()
-        logger.info(f"Created new isolated balance with {self._initial_capital:,.0f} KRW")
+        logger.info(
+            f"Created new isolated balance with {self._initial_capital:,.0f} KRW "
+            f"for asset={self._asset_symbol}"
+        )
 
     def _save(self) -> None:
         """Persist state to file atomically.
@@ -214,41 +276,60 @@ class IsolatedBalanceTracker:
             self._load_or_create()
         return self._balance  # type: ignore
 
+    @property
+    def asset_symbol(self) -> str:
+        """Ticker of the asset tracked by this instance."""
+        return self._asset_symbol
+
     def get_balances(self) -> dict[str, Decimal]:
         """Get balances in broker-compatible format.
 
         Returns:
-            Dict with KRW and BTC balances.
+            Dict with KRW and the tracker's asset balance, keyed by ticker.
+            Example: {'KRW': ..., 'BTC': ...} or {'KRW': ..., 'ETH': ...}.
         """
         return {
             "KRW": self.balance.krw,
-            "BTC": self.balance.btc,
+            self._asset_symbol: self.balance.asset_balance,
         }
 
     def get_krw_balance(self) -> Decimal:
         """Get available KRW balance."""
         return self.balance.krw
 
+    def get_asset_balance(self) -> Decimal:
+        """Get asset balance (asset-agnostic)."""
+        return self.balance.asset_balance
+
     def get_btc_balance(self) -> Decimal:
-        """Get BTC balance."""
-        return self.balance.btc
+        """Get asset balance (legacy alias). Prefer get_asset_balance()."""
+        return self.balance.asset_balance
 
     def record_buy(
         self,
         krw_spent: Decimal,
-        btc_received: Decimal,
-        fee_krw: Decimal,
+        asset_received: Decimal | None = None,
+        fee_krw: Decimal = Decimal("0"),
+        *,
+        btc_received: Decimal | None = None,  # legacy kw alias
     ) -> bool:
         """Record a BUY transaction.
 
         Args:
             krw_spent: KRW amount spent (before fees).
-            btc_received: BTC amount received.
+            asset_received: Asset amount received (BTC/ETH/XRP).
             fee_krw: Fee paid in KRW.
+            btc_received: Legacy alias for asset_received. Existing call
+                sites that pass btc_received= keep working unchanged.
 
         Returns:
             True if recorded successfully, False if insufficient balance.
         """
+        if asset_received is None:
+            asset_received = btc_received
+        if asset_received is None:
+            raise TypeError("record_buy requires asset_received (or btc_received)")
+
         total_cost = krw_spent + fee_krw
 
         if total_cost > self.balance.krw:
@@ -258,54 +339,66 @@ class IsolatedBalanceTracker:
             return False
 
         self._balance.krw -= total_cost
-        self._balance.btc += btc_received
+        self._balance.asset_balance += asset_received
         self._balance.total_invested += krw_spent
         self._balance.total_fees += fee_krw
         self._save()
 
         logger.info(
-            f"Isolated BUY: -{krw_spent:,.0f} KRW, +{btc_received:.8f} BTC, "
+            f"Isolated BUY: -{krw_spent:,.0f} KRW, "
+            f"+{asset_received:.8f} {self._asset_symbol}, "
             f"fee={fee_krw:,.0f} KRW"
         )
         return True
 
     def record_sell(
         self,
-        btc_sold: Decimal,
-        krw_received: Decimal,
-        fee_krw: Decimal,
+        asset_sold: Decimal | None = None,
+        krw_received: Decimal | None = None,
+        fee_krw: Decimal = Decimal("0"),
+        *,
+        btc_sold: Decimal | None = None,  # legacy kw alias
     ) -> bool:
         """Record a SELL transaction.
 
         Args:
-            btc_sold: BTC amount sold.
+            asset_sold: Asset amount sold (BTC/ETH/XRP).
             krw_received: KRW amount received (after fees).
             fee_krw: Fee paid in KRW.
+            btc_sold: Legacy alias for asset_sold.
 
         Returns:
             True if recorded successfully, False if insufficient balance.
         """
-        if btc_sold > self.balance.btc:
+        if asset_sold is None:
+            asset_sold = btc_sold
+        if asset_sold is None or krw_received is None:
+            raise TypeError(
+                "record_sell requires asset_sold (or btc_sold) and krw_received"
+            )
+
+        if asset_sold > self.balance.asset_balance:
             logger.warning(
-                f"Insufficient isolated BTC: {self.balance.btc:.8f} < {btc_sold:.8f}"
+                f"Insufficient isolated {self._asset_symbol}: "
+                f"{self.balance.asset_balance:.8f} < {asset_sold:.8f}"
             )
             return False
 
-        # Reduce total_invested proportionally to BTC sold
-        # This maintains correct average cost basis for remaining BTC
-        if self._balance.btc > 0 and self._balance.total_invested > 0:
-            sell_ratio = btc_sold / self._balance.btc
+        # Reduce total_invested proportionally to amount sold so the
+        # remaining holdings keep the correct average cost basis.
+        if self._balance.asset_balance > 0 and self._balance.total_invested > 0:
+            sell_ratio = asset_sold / self._balance.asset_balance
             invested_reduction = self._balance.total_invested * sell_ratio
             self._balance.total_invested -= invested_reduction
 
-        self._balance.btc -= btc_sold
+        self._balance.asset_balance -= asset_sold
         self._balance.krw += krw_received
         self._balance.total_fees += fee_krw
         self._save()
 
         logger.info(
-            f"Isolated SELL: -{btc_sold:.8f} BTC, +{krw_received:,.0f} KRW, "
-            f"fee={fee_krw:,.0f} KRW"
+            f"Isolated SELL: -{asset_sold:.8f} {self._asset_symbol}, "
+            f"+{krw_received:,.0f} KRW, fee={fee_krw:,.0f} KRW"
         )
         return True
 
@@ -325,17 +418,27 @@ class IsolatedBalanceTracker:
                 f"Daily P&L rebased for {today}: start_value={total_value:,.0f} KRW"
             )
 
-    def get_portfolio_value(self, btc_price: float) -> dict:
+    def get_portfolio_value(self, asset_price: float | None = None,
+                            btc_price: float | None = None) -> dict:
         """Calculate current portfolio value.
 
         Args:
-            btc_price: Current BTC price in KRW.
+            asset_price: Current asset price in KRW (BTC/ETH/XRP).
+            btc_price: Legacy alias for asset_price.
 
         Returns:
-            Dict with portfolio metrics.
+            Dict with portfolio metrics. Includes BOTH `asset_balance`
+            (new) and `btc_balance` (legacy mirror) keys, plus
+            `asset_value_krw`/`btc_value_krw`, so callers can migrate
+            piecemeal without breaking dashboards.
         """
-        btc_value = float(self.balance.btc) * btc_price
-        total_value = float(self.balance.krw) + btc_value
+        if asset_price is None:
+            asset_price = btc_price
+        if asset_price is None:
+            raise TypeError("get_portfolio_value requires asset_price (or btc_price)")
+
+        asset_value = float(self.balance.asset_balance) * asset_price
+        total_value = float(self.balance.krw) + asset_value
         initial = float(self.balance.initial_capital)
         total_invested = float(self.balance.total_invested)
 
@@ -349,17 +452,21 @@ class IsolatedBalanceTracker:
         else:
             daily_pnl_pct = 0.0
 
-        # Unrealized P&L: BTC position only (current value vs invested amount)
-        # This measures gain/loss on the BTC you hold, not including cash
-        if total_invested > 0 and self.balance.btc > 0:
-            unrealized_pnl_pct = ((btc_value / total_invested) - 1) * 100
+        # Unrealized P&L: asset position only (current value vs invested
+        # amount). Measures gain/loss on holdings, not including cash.
+        if total_invested > 0 and self.balance.asset_balance > 0:
+            unrealized_pnl_pct = ((asset_value / total_invested) - 1) * 100
         else:
             unrealized_pnl_pct = 0.0
 
+        asset_balance_float = float(self.balance.asset_balance)
         return {
             "krw_balance": float(self.balance.krw),
-            "btc_balance": float(self.balance.btc),
-            "btc_value_krw": btc_value,
+            "asset_balance": asset_balance_float,
+            "btc_balance": asset_balance_float,  # legacy mirror
+            "asset_symbol": self._asset_symbol,
+            "asset_value_krw": asset_value,
+            "btc_value_krw": asset_value,  # legacy mirror
             "total_value_krw": total_value,
             "initial_capital_krw": initial,
             "total_invested_krw": total_invested,
@@ -367,7 +474,7 @@ class IsolatedBalanceTracker:
             "pnl_pct": ((total_value / initial) - 1) * 100 if initial > 0 else 0,
             "daily_pnl_pct": daily_pnl_pct,
             "unrealized_pnl_pct": unrealized_pnl_pct,
-            "exposure_pct": (btc_value / total_value * 100) if total_value > 0 else 0,
+            "exposure_pct": (asset_value / total_value * 100) if total_value > 0 else 0,
             "total_fees_krw": float(self.balance.total_fees),
         }
 
@@ -380,11 +487,15 @@ class IsolatedBalanceTracker:
         capital = new_capital or self._initial_capital
         self._balance = IsolatedBalance(
             krw=capital,
-            btc=Decimal("0"),
+            asset_balance=Decimal("0"),
+            asset_symbol=self._asset_symbol,
             initial_capital=capital,
         )
         self._save()
-        logger.info(f"Isolated balance reset to {capital:,.0f} KRW")
+        logger.info(
+            f"Isolated balance reset to {capital:,.0f} KRW "
+            f"for asset={self._asset_symbol}"
+        )
 
     def adjust_capital(self, target_capital: float) -> None:
         """Adjust capital to target amount while preserving current holdings.
@@ -423,11 +534,15 @@ class IsolatedBalanceTracker:
         """Get statistics summary.
 
         Returns:
-            Dict with balance statistics.
+            Dict with balance statistics. Includes both `asset_balance`
+            (new) and `btc` (legacy mirror) keys for backward compatibility.
         """
+        asset_balance_float = float(self.balance.asset_balance)
         return {
             "krw": float(self.balance.krw),
-            "btc": float(self.balance.btc),
+            "asset_balance": asset_balance_float,
+            "btc": asset_balance_float,  # legacy mirror
+            "asset_symbol": self._asset_symbol,
             "initial_capital": float(self.balance.initial_capital),
             "total_invested": float(self.balance.total_invested),
             "total_fees": float(self.balance.total_fees),
