@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class IndicatorSnapshot:
-    """Point-in-time indicator values."""
+    """Point-in-time indicator values. Asset-agnostic with BTC backward compat."""
 
     timestamp: datetime
-    btc_price: float
+    asset_price: float
     rsi: float
     macd_line: float
     macd_signal: float
@@ -27,6 +27,7 @@ class IndicatorSnapshot:
     momentum: str  # overbought, oversold, neutral
     volatility: str  # low, medium, high
     cycle_count: int
+    asset_symbol: str = "BTC"
 
     # Bollinger Bands (default 0.0 for backward compatibility)
     bb_upper: float = 0.0
@@ -38,11 +39,18 @@ class IndicatorSnapshot:
     obv: float = 0.0
     obv_change_pct: float = 0.0  # OBV change % over recent periods
 
+    @property
+    def btc_price(self) -> float:
+        """Legacy alias for asset_price."""
+        return self.asset_price
+
     def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
+        """Convert to dictionary. Writes both new + legacy keys."""
         return {
             "timestamp": self.timestamp.isoformat(),
-            "btc_price": self.btc_price,
+            "asset_price": self.asset_price,
+            "asset_symbol": self.asset_symbol,
+            "btc_price": self.asset_price,  # legacy mirror
             "rsi": self.rsi,
             "macd_line": self.macd_line,
             "macd_signal": self.macd_signal,
@@ -61,10 +69,11 @@ class IndicatorSnapshot:
 
     @classmethod
     def from_dict(cls, data: dict) -> "IndicatorSnapshot":
-        """Create from dictionary."""
+        """Dual-read: asset_price preferred, falls back to legacy btc_price."""
         return cls(
             timestamp=datetime.fromisoformat(data["timestamp"]),
-            btc_price=data["btc_price"],
+            asset_price=data.get("asset_price", data.get("btc_price", 0.0)),
+            asset_symbol=data.get("asset_symbol", "BTC"),
             rsi=data["rsi"],
             macd_line=data["macd_line"],
             macd_signal=data["macd_signal"],

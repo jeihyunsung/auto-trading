@@ -16,64 +16,115 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PortfolioSnapshot:
-    """Point-in-time portfolio state."""
+    """Point-in-time portfolio state.
+
+    Asset-agnostic: holds BTC/ETH/XRP via asset_balance/asset_price/
+    asset_value_krw + asset_symbol. Backward-compatible with legacy
+    BTC-only JSONL files (logs/portfolio_snapshots.jsonl, 13K+ rows on
+    the live bot) via dual-read in from_dict and a legacy mirror in
+    to_dict. The legacy mirror keeps `btc_*` keys populated so older
+    dashboards / external readers don't break during the transition.
+    """
 
     timestamp: datetime
     total_value_krw: float
     cash_krw: float
-    btc_balance: float
-    btc_price: float
-    btc_value_krw: float
+    asset_balance: float
+    asset_price: float
+    asset_value_krw: float
     exposure_pct: float
     cycle_count: int = 0
+    asset_symbol: str = "BTC"
+
+    # Legacy property aliases — read-only so older code that does
+    # `snapshot.btc_balance` keeps compiling. Setting must use the new
+    # asset_* names directly.
+    @property
+    def btc_balance(self) -> float:
+        return self.asset_balance
+
+    @property
+    def btc_price(self) -> float:
+        return self.asset_price
+
+    @property
+    def btc_value_krw(self) -> float:
+        return self.asset_value_krw
 
     def to_dict(self) -> dict:
-        """Convert to dictionary for JSON serialization."""
+        """Convert to dictionary for JSON serialization.
+
+        Writes both new (asset_*) and legacy (btc_*) keys so a roll-back
+        to old code still reads its own data. Once the BTC live bot has
+        run through one save cycle and downstream readers (dashboard,
+        reports) all consume asset_*, the legacy mirror can be dropped.
+        """
         return {
             "timestamp": self.timestamp.isoformat(),
             "total_value_krw": self.total_value_krw,
             "cash_krw": self.cash_krw,
-            "btc_balance": self.btc_balance,
-            "btc_price": self.btc_price,
-            "btc_value_krw": self.btc_value_krw,
+            "asset_balance": self.asset_balance,
+            "asset_price": self.asset_price,
+            "asset_value_krw": self.asset_value_krw,
+            "asset_symbol": self.asset_symbol,
+            # Legacy mirror — TODO: remove after burn-in
+            "btc_balance": self.asset_balance,
+            "btc_price": self.asset_price,
+            "btc_value_krw": self.asset_value_krw,
             "exposure_pct": self.exposure_pct,
             "cycle_count": self.cycle_count,
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "PortfolioSnapshot":
-        """Create from dictionary."""
+        """Create from dictionary with dual-key fallback.
+
+        Live BTC JSONL files only have btc_*; new code writes both
+        asset_* and btc_*. Prefer the new keys, fall back to legacy
+        ones so existing files load without touching the data.
+        """
         return cls(
             timestamp=datetime.fromisoformat(data["timestamp"]),
             total_value_krw=data["total_value_krw"],
             cash_krw=data["cash_krw"],
-            btc_balance=data["btc_balance"],
-            btc_price=data["btc_price"],
-            btc_value_krw=data["btc_value_krw"],
+            asset_balance=data.get("asset_balance", data.get("btc_balance", 0.0)),
+            asset_price=data.get("asset_price", data.get("btc_price", 0.0)),
+            asset_value_krw=data.get(
+                "asset_value_krw", data.get("btc_value_krw", 0.0)
+            ),
             exposure_pct=data["exposure_pct"],
             cycle_count=data.get("cycle_count", 0),
+            asset_symbol=data.get("asset_symbol", "BTC"),
         )
 
 
 @dataclass
 class TradeRecord:
-    """Record of an executed trade."""
+    """Record of an executed trade. Asset-agnostic."""
 
     timestamp: datetime
     action: Literal["BUY", "SELL"]
-    btc_quantity: float
+    asset_quantity: float
     price: float
     amount_krw: float
     fee_krw: float
     confidence: float
     rationale: str
+    asset_symbol: str = "BTC"
+
+    @property
+    def btc_quantity(self) -> float:
+        """Legacy alias for asset_quantity."""
+        return self.asset_quantity
 
     def to_dict(self) -> dict:
-        """Convert to dictionary."""
+        """Convert to dictionary. Writes both new and legacy keys."""
         return {
             "timestamp": self.timestamp.isoformat(),
             "action": self.action,
-            "btc_quantity": self.btc_quantity,
+            "asset_quantity": self.asset_quantity,
+            "asset_symbol": self.asset_symbol,
+            "btc_quantity": self.asset_quantity,  # legacy mirror
             "price": self.price,
             "amount_krw": self.amount_krw,
             "fee_krw": self.fee_krw,
@@ -83,11 +134,12 @@ class TradeRecord:
 
     @classmethod
     def from_dict(cls, data: dict) -> "TradeRecord":
-        """Create from dictionary."""
+        """Dual-read: prefer asset_quantity, fall back to btc_quantity."""
         return cls(
             timestamp=datetime.fromisoformat(data["timestamp"]),
             action=data["action"],
-            btc_quantity=data["btc_quantity"],
+            asset_quantity=data.get("asset_quantity", data.get("btc_quantity", 0.0)),
+            asset_symbol=data.get("asset_symbol", "BTC"),
             price=data["price"],
             amount_krw=data["amount_krw"],
             fee_krw=data["fee_krw"],
@@ -98,7 +150,7 @@ class TradeRecord:
 
 @dataclass
 class LiveMetrics:
-    """Live trading performance metrics."""
+    """Live trading performance metrics. Asset-agnostic."""
 
     start_time: datetime
     end_time: datetime
@@ -113,13 +165,19 @@ class LiveMetrics:
     total_fees_krw: float
     win_rate_pct: float
     avg_trade_size_krw: float
-    btc_price_change_pct: float  # Buy & Hold benchmark
+    asset_price_change_pct: float  # Buy & Hold benchmark
     alpha_pct: float  # Excess return over B&H
     sharpe_ratio: float
     cycles_run: int
+    asset_symbol: str = "BTC"
+
+    @property
+    def btc_price_change_pct(self) -> float:
+        """Legacy alias for asset_price_change_pct."""
+        return self.asset_price_change_pct
 
     def to_dict(self) -> dict:
-        """Convert to dictionary."""
+        """Convert to dictionary with new + legacy key mirror."""
         return {
             "start_time": self.start_time.isoformat(),
             "end_time": self.end_time.isoformat(),
@@ -135,7 +193,9 @@ class LiveMetrics:
             "total_fees_krw": round(self.total_fees_krw),
             "win_rate_pct": round(self.win_rate_pct, 1),
             "avg_trade_size_krw": round(self.avg_trade_size_krw),
-            "btc_price_change_pct": round(self.btc_price_change_pct, 2),
+            "asset_price_change_pct": round(self.asset_price_change_pct, 2),
+            "asset_symbol": self.asset_symbol,
+            "btc_price_change_pct": round(self.asset_price_change_pct, 2),  # legacy
             "alpha_pct": round(self.alpha_pct, 2),
             "sharpe_ratio": round(self.sharpe_ratio, 2),
             "cycles_run": self.cycles_run,
@@ -163,18 +223,26 @@ class PerformanceTracker:
     - Report generation
     """
 
-    def __init__(self, config: PerformanceConfig | None = None):
+    def __init__(self, config: PerformanceConfig | None = None,
+                 asset_symbol: str | None = None):
         """Initialize performance tracker.
 
         Args:
             config: Tracker configuration.
+            asset_symbol: Ticker the bot trades (default settings.asset_symbol).
+                Stamped onto new snapshots so per-asset JSONL files are
+                self-describing.
         """
         self.config = config or PerformanceConfig()
+        if asset_symbol is None:
+            from trading.config import get_settings
+            asset_symbol = get_settings().asset_symbol
+        self.asset_symbol = asset_symbol
         self._snapshots: list[PortfolioSnapshot] = []
         self._trades: list[TradeRecord] = []
         self._start_time: datetime | None = None
         self._initial_value: float | None = None
-        self._initial_btc_price: float | None = None
+        self._initial_asset_price: float | None = None
         self._peak_value: float = 0.0
         self._last_snapshot_time: datetime | None = None
 
@@ -183,6 +251,11 @@ class PerformanceTracker:
 
         # Load existing data if available
         self._load_existing_data()
+
+    @property
+    def _initial_btc_price(self) -> float | None:
+        """Legacy alias kept until callers migrate."""
+        return self._initial_asset_price
 
     def _load_existing_data(self) -> None:
         """Load existing snapshots and trades from files."""
@@ -200,7 +273,7 @@ class PerformanceTracker:
                 if self._snapshots:
                     self._start_time = self._snapshots[0].timestamp
                     self._initial_value = self._snapshots[0].total_value_krw
-                    self._initial_btc_price = self._snapshots[0].btc_price
+                    self._initial_asset_price = self._snapshots[0].asset_price
                     self._peak_value = max(s.total_value_krw for s in self._snapshots)
                     self._last_snapshot_time = self._snapshots[-1].timestamp
                     logger.info(
@@ -213,25 +286,34 @@ class PerformanceTracker:
     def start(
         self,
         initial_value_krw: float,
-        btc_price: float,
+        asset_price: float | None = None,
         start_time: datetime | None = None,
+        *,
+        btc_price: float | None = None,  # legacy kwarg
     ) -> None:
         """Start tracking (or continue from loaded state).
 
         Args:
             initial_value_krw: Starting portfolio value.
-            btc_price: Starting BTC price.
+            asset_price: Starting asset price (BTC/ETH/XRP).
             start_time: Start timestamp.
+            btc_price: Legacy alias for asset_price; accepted for callers
+                that haven't migrated yet.
         """
+        if asset_price is None:
+            asset_price = btc_price
+        if asset_price is None:
+            raise TypeError("start() requires asset_price (or btc_price)")
+
         if self._start_time is None:
             self._start_time = start_time or datetime.now()
             self._initial_value = initial_value_krw
-            self._initial_btc_price = btc_price
+            self._initial_asset_price = asset_price
             self._peak_value = initial_value_krw
             logger.info(
                 f"Performance tracking started: "
                 f"initial_value={initial_value_krw:,.0f} KRW, "
-                f"btc_price={btc_price:,.0f}"
+                f"{self.asset_symbol}_price={asset_price:,.0f}"
             )
         else:
             logger.info(
@@ -243,26 +325,42 @@ class PerformanceTracker:
         self,
         total_value_krw: float,
         cash_krw: float,
-        btc_balance: float,
-        btc_price: float,
+        asset_balance: float | None = None,
+        asset_price: float | None = None,
         cycle_count: int = 0,
         current_time: datetime | None = None,
         force: bool = False,
+        *,
+        btc_balance: float | None = None,  # legacy
+        btc_price: float | None = None,  # legacy
     ) -> bool:
         """Record portfolio snapshot.
 
         Args:
             total_value_krw: Total portfolio value.
             cash_krw: Cash balance.
-            btc_balance: BTC balance.
-            btc_price: Current BTC price.
+            asset_balance: Held asset quantity (BTC/ETH/XRP).
+            asset_price: Current asset price (KRW).
             cycle_count: Current trading cycle.
             current_time: Timestamp (defaults to now).
             force: Force snapshot regardless of interval.
+            btc_balance / btc_price: Legacy aliases for asset_balance /
+                asset_price. Existing callers (main.py, main_async.py)
+                that still pass these continue to work.
 
         Returns:
             True if snapshot was recorded.
         """
+        if asset_balance is None:
+            asset_balance = btc_balance
+        if asset_price is None:
+            asset_price = btc_price
+        if asset_balance is None or asset_price is None:
+            raise TypeError(
+                "record_snapshot requires asset_balance + asset_price "
+                "(or legacy btc_balance + btc_price)"
+            )
+
         now = current_time or datetime.now()
 
         # Check interval
@@ -271,18 +369,19 @@ class PerformanceTracker:
             if elapsed < self.config.snapshot_interval_minutes:
                 return False
 
-        btc_value = btc_balance * btc_price
-        exposure = (btc_value / total_value_krw * 100) if total_value_krw > 0 else 0
+        asset_value = asset_balance * asset_price
+        exposure = (asset_value / total_value_krw * 100) if total_value_krw > 0 else 0
 
         snapshot = PortfolioSnapshot(
             timestamp=now,
             total_value_krw=total_value_krw,
             cash_krw=cash_krw,
-            btc_balance=btc_balance,
-            btc_price=btc_price,
-            btc_value_krw=btc_value,
+            asset_balance=asset_balance,
+            asset_price=asset_price,
+            asset_value_krw=asset_value,
             exposure_pct=exposure,
             cycle_count=cycle_count,
+            asset_symbol=self.asset_symbol,
         )
 
         self._snapshots.append(snapshot)
@@ -304,30 +403,41 @@ class PerformanceTracker:
     def record_trade(
         self,
         action: Literal["BUY", "SELL"],
-        btc_quantity: float,
-        price: float,
-        amount_krw: float,
-        fee_krw: float,
-        confidence: float,
-        rationale: str,
+        asset_quantity: float | None = None,
+        price: float = 0.0,
+        amount_krw: float = 0.0,
+        fee_krw: float = 0.0,
+        confidence: float = 0.0,
+        rationale: str = "",
         timestamp: datetime | None = None,
+        *,
+        btc_quantity: float | None = None,  # legacy
     ) -> None:
         """Record an executed trade.
 
         Args:
             action: Trade action (BUY/SELL).
-            btc_quantity: BTC quantity traded.
+            asset_quantity: Asset quantity traded (BTC/ETH/XRP).
             price: Execution price.
             amount_krw: KRW amount.
             fee_krw: Fee paid.
             confidence: Decision confidence.
             rationale: Decision rationale.
             timestamp: Trade timestamp.
+            btc_quantity: Legacy alias for asset_quantity.
         """
+        if asset_quantity is None:
+            asset_quantity = btc_quantity
+        if asset_quantity is None:
+            raise TypeError(
+                "record_trade requires asset_quantity (or btc_quantity)"
+            )
+
         trade = TradeRecord(
             timestamp=timestamp or datetime.now(),
             action=action,
-            btc_quantity=btc_quantity,
+            asset_quantity=asset_quantity,
+            asset_symbol=self.asset_symbol,
             price=price,
             amount_krw=amount_krw,
             fee_krw=fee_krw,
@@ -336,7 +446,7 @@ class PerformanceTracker:
         )
         self._trades.append(trade)
         logger.info(
-            f"Trade recorded: {action} {btc_quantity:.6f} BTC "
+            f"Trade recorded: {action} {asset_quantity:.6f} {self.asset_symbol} "
             f"@ {price:,.0f} ({amount_krw:,.0f} KRW)"
         )
 
@@ -378,17 +488,17 @@ class PerformanceTracker:
             else 0
         )
 
-        # BTC price change (benchmark)
-        btc_change = 0.0
-        if self._initial_btc_price and self._initial_btc_price > 0:
-            btc_change = (
-                (latest.btc_price - self._initial_btc_price)
-                / self._initial_btc_price
+        # Asset price change (Buy & Hold benchmark)
+        asset_change = 0.0
+        if self._initial_asset_price and self._initial_asset_price > 0:
+            asset_change = (
+                (latest.asset_price - self._initial_asset_price)
+                / self._initial_asset_price
                 * 100
             )
 
         # Alpha
-        alpha = total_return - btc_change
+        alpha = total_return - asset_change
 
         # Sharpe ratio (simplified daily calculation)
         sharpe = self._calculate_sharpe_ratio()
@@ -407,7 +517,8 @@ class PerformanceTracker:
             total_fees_krw=total_fees,
             win_rate_pct=win_rate,
             avg_trade_size_krw=avg_size,
-            btc_price_change_pct=btc_change,
+            asset_price_change_pct=asset_change,
+            asset_symbol=self.asset_symbol,
             alpha_pct=alpha,
             sharpe_ratio=sharpe,
             cycles_run=latest.cycle_count,
@@ -567,7 +678,7 @@ class PerformanceTracker:
 
 | Metric | Strategy | Buy & Hold | Difference |
 |--------|----------|------------|------------|
-| Return | {metrics.total_return_pct:+.2f}% | {metrics.btc_price_change_pct:+.2f}% | **{metrics.alpha_pct:+.2f}%** |
+| Return | {metrics.total_return_pct:+.2f}% | {metrics.asset_price_change_pct:+.2f}% | **{metrics.alpha_pct:+.2f}%** |
 
 ---
 
@@ -603,7 +714,7 @@ class PerformanceTracker:
                 report += (
                     f"| {trade.timestamp.strftime('%m-%d %H:%M')} "
                     f"| {trade.action} "
-                    f"| {trade.btc_quantity:.6f} "
+                    f"| {trade.asset_quantity:.6f} "
                     f"| {trade.price:,.0f} "
                     f"| {trade.amount_krw:,.0f} |\n"
                 )

@@ -182,10 +182,12 @@ def indicator_agent_node(state: TradingState) -> dict:
         # Record indicator snapshot for dashboard
         writer = get_indicator_writer()
         if writer:
+            from trading.config import get_settings
             signals = indicators.get("signals", {})
             writer.record(IndicatorSnapshot(
                 timestamp=datetime.now(KST),
-                btc_price=market.get("current_price", 0),
+                asset_price=market.get("current_price", 0),
+                asset_symbol=get_settings().asset_symbol,
                 rsi=signals.get("rsi", 50.0),
                 macd_line=signals.get("macd_line", 0.0),
                 macd_signal=signals.get("macd_signal", 0.0),

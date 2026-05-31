@@ -50,9 +50,9 @@ class TestPortfolioSnapshot:
             timestamp=now,
             total_value_krw=10_000_000,
             cash_krw=5_000_000,
-            btc_balance=0.05,
-            btc_price=100_000_000,
-            btc_value_krw=5_000_000,
+            asset_balance=0.05,
+            asset_price=100_000_000,
+            asset_value_krw=5_000_000,
             exposure_pct=50.0,
             cycle_count=10,
         )
@@ -73,9 +73,9 @@ class TestPortfolioSnapshot:
             timestamp=now,
             total_value_krw=10_000_000,
             cash_krw=5_000_000,
-            btc_balance=0.05,
-            btc_price=100_000_000,
-            btc_value_krw=5_000_000,
+            asset_balance=0.05,
+            asset_price=100_000_000,
+            asset_value_krw=5_000_000,
             exposure_pct=50.0,
             cycle_count=10,
         )
@@ -115,7 +115,7 @@ class TestTradeRecord:
         trade = TradeRecord(
             timestamp=now,
             action="BUY",
-            btc_quantity=0.01,
+            asset_quantity=0.01,
             price=100_000_000,
             amount_krw=1_000_000,
             fee_krw=500,
@@ -138,7 +138,7 @@ class TestTradeRecord:
         trade = TradeRecord(
             timestamp=now,
             action="SELL",
-            btc_quantity=0.02,
+            asset_quantity=0.02,
             price=105_000_000,
             amount_krw=2_100_000,
             fee_krw=1050,
@@ -172,7 +172,7 @@ class TestLiveMetrics:
             total_fees_krw=5000,
             win_rate_pct=60.0,
             avg_trade_size_krw=1_000_000,
-            btc_price_change_pct=3.0,
+            asset_price_change_pct=3.0,
             alpha_pct=2.0,
             sharpe_ratio=1.5,
             cycles_run=100,
@@ -202,7 +202,7 @@ class TestLiveMetrics:
             total_fees_krw=5000,
             win_rate_pct=60.0,
             avg_trade_size_krw=1_000_000,
-            btc_price_change_pct=3.0,
+            asset_price_change_pct=3.0,
             alpha_pct=2.0,
             sharpe_ratio=1.5,
             cycles_run=100,
@@ -232,7 +232,7 @@ class TestPerformanceTracker:
         """Test starting performance tracking."""
         tracker.start(
             initial_value_krw=10_000_000,
-            btc_price=100_000_000,
+            asset_price=100_000_000,
         )
 
         assert tracker._start_time is not None
@@ -246,8 +246,8 @@ class TestPerformanceTracker:
         recorded = tracker.record_snapshot(
             total_value_krw=10_500_000,
             cash_krw=5_000_000,
-            btc_balance=0.055,
-            btc_price=100_000_000,
+            asset_balance=0.055,
+            asset_price=100_000_000,
             cycle_count=1,
             force=True,
         )
@@ -264,8 +264,8 @@ class TestPerformanceTracker:
         tracker.record_snapshot(
             total_value_krw=10_000_000,
             cash_krw=5_000_000,
-            btc_balance=0.05,
-            btc_price=100_000_000,
+            asset_balance=0.05,
+            asset_price=100_000_000,
             cycle_count=1,
             force=True,
         )
@@ -274,8 +274,8 @@ class TestPerformanceTracker:
         recorded = tracker.record_snapshot(
             total_value_krw=10_100_000,
             cash_krw=5_000_000,
-            btc_balance=0.051,
-            btc_price=100_000_000,
+            asset_balance=0.051,
+            asset_price=100_000_000,
             cycle_count=2,
             force=False,
         )
@@ -289,7 +289,7 @@ class TestPerformanceTracker:
 
         tracker.record_trade(
             action="BUY",
-            btc_quantity=0.01,
+            asset_quantity=0.01,
             price=100_000_000,
             amount_krw=1_000_000,
             fee_krw=500,
@@ -316,8 +316,8 @@ class TestPerformanceTracker:
         tracker.record_snapshot(
             total_value_krw=10_000_000,
             cash_krw=5_000_000,
-            btc_balance=0.05,
-            btc_price=100_000_000,
+            asset_balance=0.05,
+            asset_price=100_000_000,
             cycle_count=1,
             current_time=now,
             force=True,
@@ -326,8 +326,8 @@ class TestPerformanceTracker:
         tracker.record_snapshot(
             total_value_krw=10_500_000,
             cash_krw=5_250_000,
-            btc_balance=0.05,
-            btc_price=105_000_000,
+            asset_balance=0.05,
+            asset_price=105_000_000,
             cycle_count=2,
             current_time=now + timedelta(hours=24),
             force=True,
@@ -359,8 +359,8 @@ class TestPerformanceTracker:
             tracker.record_snapshot(
                 total_value_krw=value,
                 cash_krw=value // 2,
-                btc_balance=0.05,
-                btc_price=100_000_000,
+                asset_balance=0.05,
+                asset_price=100_000_000,
                 cycle_count=hours + 1,
                 current_time=now + timedelta(hours=hours),
                 force=True,
@@ -389,7 +389,7 @@ class TestPerformanceTracker:
         for action, price in trades:
             tracker.record_trade(
                 action=action,
-                btc_quantity=0.01,
+                asset_quantity=0.01,
                 price=price,
                 amount_krw=price * 0.01,
                 fee_krw=500,
@@ -401,8 +401,8 @@ class TestPerformanceTracker:
         tracker.record_snapshot(
             total_value_krw=10_000_000,
             cash_krw=10_000_000,
-            btc_balance=0,
-            btc_price=100_000_000,
+            asset_balance=0,
+            asset_price=100_000_000,
             force=True,
         )
 
@@ -419,8 +419,8 @@ class TestPerformanceTracker:
         tracker.record_snapshot(
             total_value_krw=10_500_000,
             cash_krw=5_000_000,
-            btc_balance=0.055,
-            btc_price=100_000_000,
+            asset_balance=0.055,
+            asset_price=100_000_000,
             force=True,
         )
 
@@ -436,8 +436,8 @@ class TestPerformanceTracker:
         tracker.record_snapshot(
             total_value_krw=10_000_000,
             cash_krw=5_000_000,
-            btc_balance=0.05,
-            btc_price=100_000_000,
+            asset_balance=0.05,
+            asset_price=100_000_000,
             force=True,
         )
 
@@ -458,8 +458,8 @@ class TestPerformanceTracker:
         tracker.record_snapshot(
             total_value_krw=10_000_000,
             cash_krw=5_000_000,
-            btc_balance=0.05,
-            btc_price=100_000_000,
+            asset_balance=0.05,
+            asset_price=100_000_000,
             force=True,
         )
 
@@ -480,8 +480,8 @@ class TestPerformanceTracker:
         tracker.record_snapshot(
             total_value_krw=10_500_000,
             cash_krw=5_000_000,
-            btc_balance=0.055,
-            btc_price=100_000_000,
+            asset_balance=0.055,
+            asset_price=100_000_000,
             current_time=now + timedelta(hours=1),
             force=True,
         )
@@ -501,15 +501,15 @@ class TestPerformanceTracker:
         tracker.record_snapshot(
             total_value_krw=10_500_000,
             cash_krw=5_000_000,
-            btc_balance=0.055,
-            btc_price=100_000_000,
+            asset_balance=0.055,
+            asset_price=100_000_000,
             current_time=now + timedelta(hours=1),
             force=True,
         )
 
         tracker.record_trade(
             action="BUY",
-            btc_quantity=0.01,
+            asset_quantity=0.01,
             price=100_000_000,
             amount_krw=1_000_000,
             fee_krw=500,

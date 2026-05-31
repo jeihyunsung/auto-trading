@@ -6,7 +6,7 @@ from JSONL files for dashboard visualization.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from trading.core.decision_history import DecisionRecord
@@ -30,6 +30,31 @@ def normalize_timestamp(dt: datetime) -> datetime:
         # Naive datetime assumed to be UTC, convert to KST
         return dt.replace(tzinfo=timezone.utc).astimezone(KST)
     return dt.astimezone(KST)
+
+
+def _normalize_snapshot_dict(data: dict) -> dict:
+    """Ensure both new (asset_*) and legacy (btc_*) keys are present.
+
+    Live JSONL rows written by old code only have btc_*. The dashboard
+    code is being migrated to asset_*, but during transition both must
+    work. Backfill the missing direction so callers can read either name.
+    """
+    if "asset_price" not in data and "btc_price" in data:
+        data["asset_price"] = data["btc_price"]
+    if "asset_balance" not in data and "btc_balance" in data:
+        data["asset_balance"] = data["btc_balance"]
+    if "asset_value_krw" not in data and "btc_value_krw" in data:
+        data["asset_value_krw"] = data["btc_value_krw"]
+    if "asset_symbol" not in data:
+        data["asset_symbol"] = "BTC"
+    # Reverse mirror so callers that still expect btc_* keys also work
+    if "btc_price" not in data and "asset_price" in data:
+        data["btc_price"] = data["asset_price"]
+    if "btc_balance" not in data and "asset_balance" in data:
+        data["btc_balance"] = data["asset_balance"]
+    if "btc_value_krw" not in data and "asset_value_krw" in data:
+        data["btc_value_krw"] = data["asset_value_krw"]
+    return data
 
 
 class HistoryReader:
@@ -122,7 +147,7 @@ class HistoryReader:
                         ts_normalized = normalize_timestamp(ts)
                         if ts_normalized >= cutoff:
                             data["timestamp"] = ts_normalized
-                            snapshots.append(data)
+                            snapshots.append(_normalize_snapshot_dict(data))
         except Exception as e:
             logger.warning(f"Failed to read portfolio snapshots: {e}")
 
