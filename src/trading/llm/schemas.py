@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class LLMDecisionOutput(BaseModel):
@@ -31,7 +31,12 @@ class RiskValidationInput(BaseModel):
 
     # Portfolio
     krw_balance: float
-    btc_balance: float
+    asset_balance: float = Field(
+        validation_alias=AliasChoices("asset_balance", "btc_balance"),
+        description="Held-asset balance (BTC/ETH/XRP). Accepts legacy "
+                    "btc_balance key for backward compatibility.",
+    )
+    asset_symbol: str = "BTC"
     current_exposure: float
 
     # Risk limits

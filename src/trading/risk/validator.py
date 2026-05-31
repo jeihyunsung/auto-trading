@@ -272,13 +272,21 @@ class DecisionValidator:
             if not llm.is_available:
                 return None
 
+            from trading.config import get_settings
+            asset_symbol = get_settings().asset_symbol
+
             prompt = RISK_VALIDATION_USER_PROMPT.format(
+                asset_symbol=asset_symbol,
                 action=decision["action"],
                 confidence=decision["confidence"],
                 suggested_size=decision["suggested_size_pct"],
                 rationale=decision["rationale"],
                 krw_balance=portfolio.cash_krw,
-                btc_balance=portfolio.asset_value_krw / portfolio.total_value_krw if portfolio.total_value_krw > 0 else 0,
+                asset_balance=(
+                    portfolio.asset_value_krw / portfolio.total_value_krw
+                    if portfolio.total_value_krw > 0
+                    else 0
+                ),
                 current_exposure=portfolio.exposure_pct,
                 max_position=self.risk_manager.limits.max_position_pct,
                 max_daily_loss=self.risk_manager.limits.max_daily_loss_pct,
@@ -290,7 +298,9 @@ class DecisionValidator:
             )
 
             return llm.invoke_json(
-                RISK_VALIDATION_SYSTEM_PROMPT,
+                RISK_VALIDATION_SYSTEM_PROMPT.replace(
+                    "{asset_symbol}", asset_symbol
+                ),
                 prompt,
                 RiskValidationOutput,
             )

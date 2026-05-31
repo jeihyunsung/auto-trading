@@ -640,7 +640,9 @@ class DecisionAgent:
         # Get pattern analysis data
         pattern = state.get("pattern_analysis") or {}
 
+        asset_symbol = get_settings().asset_symbol
         prompt = DECISION_USER_PROMPT.format(
+            asset_symbol=asset_symbol,
             symbol=market.get("symbol", "KRW-BTC"),
             current_price=market.get("current_price", 0),
             change_24h=market.get("percent_change_24h", 0),
@@ -677,7 +679,13 @@ class DecisionAgent:
             pattern_confidence=pattern.get("confidence", 0.0),
             pattern_description=pattern.get("description", "패턴 분석 없음"),
             krw_balance=portfolio.get("cash_krw", 0) if portfolio else 0,
-            btc_balance=portfolio.get("btc_balance", 0) if portfolio else 0,
+            asset_balance=(
+                portfolio.get(
+                    "asset_balance", portfolio.get("btc_balance", 0)
+                )
+                if portfolio
+                else 0
+            ),
             exposure=portfolio.get("exposure_pct", 0) if portfolio else 0,
             unrealized_pnl=portfolio.get("unrealized_pnl", 0) if portfolio else 0,
             max_position=risk.get("position_limit_pct", 50),
@@ -687,15 +695,24 @@ class DecisionAgent:
             decision_history=decision_history_text,
         )
 
+        # System prompt now carries {asset_symbol} placeholders for multi-asset
+        # support; render before sending. Use str.replace instead of .format()
+        # because the prompt body also contains illustrative `{실제값}` Korean
+        # placeholders that aren't real template variables and would explode
+        # .format(). Hash + cache_key include asset_symbol so an ETH/XRP bot
+        # does not reuse a BTC-formatted cache row.
+        system_prompt = DECISION_SYSTEM_PROMPT.replace("{asset_symbol}", asset_symbol)
+
         # Check cache for similar market state (only HOLD decisions are cached).
         # Cache key includes derivatives (funding/position_bias/oi_trend) so a
         # shift in futures sentiment invalidates an otherwise-identical RSI/trend
         # cache entry — the LLM may now reach a different conclusion.
         cache = get_response_cache()
         import hashlib
-        sys_hash = hashlib.md5(DECISION_SYSTEM_PROMPT[:100].encode()).hexdigest()[:8]
+        sys_hash = hashlib.md5(system_prompt[:100].encode()).hexdigest()[:8]
         cache_key = cache.make_key(
             sys_hash,
+            asset=asset_symbol,
             trend=indicators.get("trend", "neutral"),
             momentum=indicators.get("momentum", "neutral"),
             rsi=indicators.get("signals", {}).get("rsi", 50),
@@ -711,7 +728,7 @@ class DecisionAgent:
             logger.info("Using cached HOLD decision (market state similar to recent call)")
             return cached
 
-        result = llm.invoke_json(DECISION_SYSTEM_PROMPT, prompt, LLMDecisionOutput)
+        result = llm.invoke_json(system_prompt, prompt, LLMDecisionOutput)
 
         # Check MTF trend alignment BEFORE position sizing
         mtf_trends = state.get("mtf_trends")

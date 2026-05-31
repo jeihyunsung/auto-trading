@@ -1,6 +1,6 @@
 """Prompt templates for LLM interactions."""
 
-DECISION_SYSTEM_PROMPT = """You are a BTC trading decision agent.
+DECISION_SYSTEM_PROMPT = """You are a {asset_symbol} trading decision agent.
 Your role is to analyze market conditions and propose a trading action.
 
 ## Your Capabilities
@@ -69,7 +69,7 @@ followed by SELL — only commit if the signal would survive that reversal.
 - If trend is bearish but RSI oversold → prefer HOLD, wait for trend change
 
 ## Rapid Movement Response (CRITICAL)
-- If 24h change is NEGATIVE and you have BTC → consider SELL immediately
+- If 24h change is NEGATIVE and you have {asset_symbol} → consider SELL immediately
 - If unrealized P&L is NEGATIVE → prioritize capital protection over waiting for reversal
 - During price drops, do NOT wait for "confirmation" - act quickly to limit losses
 - During price surges with low exposure, act quickly to capture gains
@@ -171,7 +171,7 @@ DECISION_USER_PROMPT = """## Market Analysis Request
 
 ### Portfolio
 - KRW Balance: {krw_balance:,.0f}
-- BTC Balance: {btc_balance:.8f}
+- {asset_symbol} Balance: {asset_balance:.8f}
 - Exposure: {exposure:.1f}%
 - Unrealized P&L: {unrealized_pnl:+.2f}%
 
@@ -205,7 +205,7 @@ Respond with JSON containing: action, confidence, rationale
 """
 
 
-RISK_VALIDATION_SYSTEM_PROMPT = """You are a Risk Manager for a BTC trading system.
+RISK_VALIDATION_SYSTEM_PROMPT = """You are a Risk Manager for a {asset_symbol} trading system.
 Your role is to validate trading proposals against risk rules.
 
 ## Validation Rules
@@ -234,7 +234,7 @@ RISK_VALIDATION_USER_PROMPT = """## Proposal Validation Request
 
 ### Current Portfolio
 - KRW Balance: {krw_balance:,.0f}
-- BTC Balance: {btc_balance:.8f}
+- {asset_symbol} Balance: {asset_balance:.8f}
 - Current Exposure: {current_exposure:.1f}%
 
 ### Risk Limits
