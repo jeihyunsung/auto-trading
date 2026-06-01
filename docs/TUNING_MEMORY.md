@@ -27,7 +27,7 @@
 - ~~[#l5](#l5) BUY 정체~~ — **자체 해소 (5/30 04:53)**. RSI 47.7로 하락하며 정상 BUY 발동. 옵션 A는 진입을 *지연*만 하고 *금지* 안 함을 검증.
 - [#l6](#l6) **RSI 22 극단 과매도 + bearish MTF → HOLD** (5/31). Trend Confirmation Rule이 작동. 며칠 후 결과(bottom vs 추가 하락)로 정책 평가.
 - Take-profit ([#t1](#t1)) 실전 발동 0회 — +1.5% 도달 케이스 부재. 시장 환경 영향.
-- [#h5](#h5) **SELL conf < last BUY conf인 stalemate** (6/01). LLM이 7h+ 동안 SELL 권고했지만 hysteresis가 매번 delta=-0.05~-0.07로 차단. 가격은 그동안 -0.55% 하락. Cumulative blocking (0.4×)이 적용 중인데도 음수 delta 자체가 통과 못함 — anchoring을 conf 차이가 아니라 시간 경과로도 풀어주는 정책 필요?
+- ~~[#h5](#h5) SELL conf < last BUY conf 스테일메이트~~ — **Fix shipped** (commit `1ac6e3a`, 6/01). Anchor decay (6h grace, -0.02/h, floor 0.55) + 보조 prompt calibration. 실전 효과는 다음 stalemate 사이클에서 검증.
 
 ## Active Settings (요약)
 
@@ -43,6 +43,9 @@
 | `buy_conf_cap_value` | 0.65 | [#l3](#l3) |
 | `llm_request_timeout_seconds` | 45.0 | [#o1](#o1) |
 | `pattern_agent_enabled` (env) | false | [#o3](#o3) |
+| `reversal_anchor_decay_start` | 6h | [#h5](#h5) |
+| `reversal_anchor_decay_per_hour` | 0.02 | [#h5](#h5) |
+| `reversal_anchor_conf_floor` | 0.55 | [#h5](#h5) |
 
 ---
 
@@ -296,13 +299,14 @@
   - [#h4](#h4)는 cumulative count 기반 (양수 delta가 필요하다는 가정).
   - [#h5](#h5)는 두 가지 모두 작동했지만 **delta가 음수**라서 unreachable.
 - **Why now**: 6/01 시장은 sideways → bearish. RSI 51~57 중립, MACD 약한 상승. LLM이 SELL을 "conviction 0.60"으로 신호 — anchor BUY 0.65보다 낮음.
-- **Status**: 미수정. [#h1](#h1)~[#h4](#h4)의 multi-layer 정책이 음수 delta 케이스를 다루지 않음.
-- **Possible fixes**:
-  1. **Time-based anchor decay**: last trade로부터 N분 경과 시 anchor conf를 점진적으로 낮춤 (예: 30min마다 -0.05). 시간 경과 자체를 conviction 변화로 해석.
-  2. **Absolute SELL threshold**: position이 있고 LLM이 K번 연속 SELL 권고하면 conf 비교 없이 통과 (예: 5 cycle 연속 SELL).
-  3. **Anchor reset on price drift**: 가격이 anchor BUY 대비 −0.5% 이상 하락한 상태에서 SELL이면 conf 비교 우회.
-  4. **LLM prompt 수정**: position이 있고 가격 하락 중일 때 SELL을 더 강한 conf로 표현하도록.
-- **Related**: [#h1](#h1) (anchor 자체 개념), [#h4](#h4) (cumulative relaxation), [#l5](#l5) ([#h5](#h5)와 반대 — 누적 BUY 권고 → 자동 해소 패턴 검증). 
+- **Status**: **Fixed** (commit `1ac6e3a`, 6/01) — A안 + 보조 D안 채택. Codex 권고.
+- **Fix (A 주)**: `_decay_reversal_anchor_confidence()` — `last_trade_time` 후 6h grace까지 anchor 유지, 이후 시간당 -0.02 감쇠, floor 0.55. anchor 0.65 BUY는 11h 후 0.55까지 내려가서 SELL 0.60+이 자연스럽게 통과.
+- **Fix (D 보조)**: prompt `Decision Consistency` — "conf > 0.8 to reverse"를 시간 조건부(15분 이내)로 한정. 신규 섹션 "Protective SELL Confidence"로 LLM에게 entry conf에 앵커링 X, 현재 setup만 평가하라고 지시.
+- **검토 후 채택 안한 후보**:
+  - B (연속 SELL bypass) — flip-flop 보호 깨고 cadence 의존성 큼
+  - C (가격 drift reset) — stop-loss와 이원화, 침습도 큼
+- **Verification**: 4개 단위 테스트 통과 (18h decay 통과 / 2h grace 차단 / 100h floor 클램프 / same-direction 영향 없음). 실전 효과는 다음 stalemate 발생 시 측정.
+- **Related**: [#h1](#h1) (anchor 자체 개념), [#h4](#h4) (cumulative relaxation), [#l5](#l5) ([#h5](#h5)와 반대 — 누적 BUY 권고 → 자체 해소 패턴 검증).
 
 ---
 
