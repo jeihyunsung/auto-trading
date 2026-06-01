@@ -27,7 +27,7 @@
 - ~~[#l5](#l5) BUY 정체~~ — **자체 해소 (5/30 04:53)**. RSI 47.7로 하락하며 정상 BUY 발동. 옵션 A는 진입을 *지연*만 하고 *금지* 안 함을 검증.
 - [#l6](#l6) **RSI 22 극단 과매도 + bearish MTF → HOLD** (5/31). Trend Confirmation Rule이 작동. 며칠 후 결과(bottom vs 추가 하락)로 정책 평가.
 - Take-profit ([#t1](#t1)) 실전 발동 0회 — +1.5% 도달 케이스 부재. 시장 환경 영향.
-- ~~[#h5](#h5) SELL conf < last BUY conf 스테일메이트~~ — **Fix shipped** (commit `1ac6e3a`, 6/01). Anchor decay (6h grace, -0.02/h, floor 0.55) + 보조 prompt calibration. 실전 효과는 다음 stalemate 사이클에서 검증.
+- ~~[#h5](#h5) SELL conf < last BUY conf 스테일메이트~~ — **Fix shipped + 가치 검증 완료** (commit `1ac6e3a`, 6/01). Anchor decay (6h grace, -0.02/h, floor 0.55) + 보조 prompt calibration. **6/01 실측**: stalemate 동안 5/30 BUY @ 109.14M → 6/01 stop-loss @ 106.64M (누적 -2.08% 손실, 그 중 stalemate 6h가 -0.5% 기여). VM 미배포 상태로 자체 해소되긴 했으나 fix 가치 정량 입증.
 
 ## Active Settings (요약)
 
@@ -305,7 +305,8 @@
 - **검토 후 채택 안한 후보**:
   - B (연속 SELL bypass) — flip-flop 보호 깨고 cadence 의존성 큼
   - C (가격 drift reset) — stop-loss와 이원화, 침습도 큼
-- **Verification**: 4개 단위 테스트 통과 (18h decay 통과 / 2h grace 차단 / 100h floor 클램프 / same-direction 영향 없음). 실전 효과는 다음 stalemate 발생 시 측정.
+- **Verification**: 4개 단위 테스트 통과 (18h decay 통과 / 2h grace 차단 / 100h floor 클램프 / same-direction 영향 없음).
+- **Live outcome (VM 미배포, 6/01)**: 5/30 20:09 BUY @ 109.14M conf=0.65 anchor → 5/31 23:09~6/01 05:25 (6h+) SELL stalemate → 마침내 LLM이 conf 0.71로 SELL 신호하며 cumulative threshold 0.06과 일치, 자체 해소. 그러나 그 6h 동안 가격 -0.42% drift, 잔량은 6/01 17:31 stop-loss @ 106.64M까지 누적 -2.08% 손실. anchor decay 적용 상태였다면 약 11h 후 (5/31 07시경) anchor가 floor 0.55에 도달해서 첫 SELL을 더 일찍 통과시켰을 것 → 추정 -0.5~1% 손실 회피 가능. fix 효과 정량 입증.
 - **Related**: [#h1](#h1) (anchor 자체 개념), [#h4](#h4) (cumulative relaxation), [#l5](#l5) ([#h5](#h5)와 반대 — 누적 BUY 권고 → 자체 해소 패턴 검증).
 
 ---
