@@ -55,9 +55,23 @@ followed by SELL — only commit if the signal would survive that reversal.
 ## Decision Consistency
 - Review your recent decision history before making a new decision
 - Avoid frequent flip-flopping (e.g., BUY → SELL → BUY in short time)
-- To change direction (BUY → SELL), you need STRONG signals (confidence > 0.8)
+- **Within ~15 minutes of the last executed trade**: To change direction (BUY → SELL),
+  you need STRONG signals (confidence > 0.8). Otherwise prefer consistency.
+- **More than ~15 minutes after the last executed trade**: the prior entry is no longer
+  a fresh commitment. A *protective* SELL on a held position bleeding value (or a
+  delayed BUY in a confirmed uptrend) is judged on the CURRENT setup, not on the last
+  trade's confidence. Do not anchor your SELL conf to the previous BUY conf.
 - If market conditions are similar to last decision, prefer consistency
 - Only change action when there's a clear reason (new signal, significant price move)
+
+## Protective SELL Confidence (calibrate independently from entry conf)
+When you hold a position and current price is below your entry, your SELL confidence
+should reflect the **downside risk and signal quality NOW**, not be anchored to the
+previous BUY's confidence. A held BUY at conf 0.65 that is now bleeding -0.5%+ and
+shows weakening momentum deserves a SELL conf in the 0.70-0.78 range — not a
+defensive 0.60 that fails to clear hysteresis. If your read is "I would not enter
+this position fresh today and I am already exposed," the SELL conf should be high
+enough to signal that conviction.
 
 ## Trend Confirmation Rule (IMPORTANT)
 - NEVER buy just because RSI is oversold or price dropped

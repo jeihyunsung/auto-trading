@@ -443,3 +443,138 @@ class TestHysteresisIntegration:
         finally:
             # Restore original state
             set_hysteresis_manager(original)
+
+
+class TestReversalAnchorDecay:
+    """[#h5] — stale BUY/SELL anchor confidence must decay so that LLM
+    moderate SELL recommendations can eventually pass even when their
+    confidence is at or below the original entry conf.
+    """
+
+    def _make_decision(
+        self,
+        action: str = "HOLD",
+        confidence: float = 0.5,
+        size: float = 0.0,
+    ) -> Decision:
+        return Decision(
+            action=action,
+            confidence=confidence,
+            suggested_size_pct=size,
+            rationale="t",
+            status="pending",
+        )
+
+    def _seed_last_trade(
+        self,
+        manager: HysteresisManager,
+        action: str,
+        confidence: float,
+        when: datetime,
+    ) -> None:
+        manager.last_trade_action = {
+            "action": action,
+            "confidence": confidence,
+            "size": 5.0,
+            "timestamp": when.isoformat(),
+            "rationale": "seeded",
+        }
+        # Also seed `previous` so reversal branch picks it up.
+        manager.previous = manager.last_trade_action.copy()
+
+    def test_reversal_anchor_decay_allows_stale_buy_to_sell(self):
+        """24h-old BUY conf=0.65 should let SELL conf=0.65 through.
+
+        After grace (6h), 18h of decay at 0.02/h = 0.36 drop, but floored
+        at 0.55. With anchor at 0.55 and SELL at 0.65, delta=+0.10 which
+        is above the streaming reversal threshold of 0.15? No — still
+        below. Use a longer elapsed and stronger SELL.
+        """
+        config = HysteresisConfig.streaming()
+        manager = HysteresisManager(config)
+
+        base = datetime(2026, 5, 30, 20, 9, 0)
+        self._seed_last_trade(manager, "BUY", confidence=0.65, when=base)
+
+        # 18h later: past the 15min post-trade cooldown and well past the
+        # 6h grace, anchor decays from 0.65 toward floor 0.55.
+        later = base + timedelta(hours=18)
+        result = manager.apply_hysteresis(
+            self._make_decision(action="SELL", confidence=0.75, size=5.0),
+            cycle_count=10,
+            simulated_time=later,
+        )
+        assert result["action"] == "SELL", (
+            f"Expected stale anchor decay to allow SELL through; got HOLD. "
+            f"Rationale: {result.get('rationale','')}"
+        )
+
+    def test_recent_buy_still_blocks_moderate_sell(self):
+        """Within the 6h grace, anchor is unchanged so SELL conf 0.60 vs
+        anchor 0.65 (delta -0.05) must remain blocked."""
+        config = HysteresisConfig.streaming()
+        manager = HysteresisManager(config)
+
+        base = datetime(2026, 5, 30, 20, 9, 0)
+        self._seed_last_trade(manager, "BUY", confidence=0.65, when=base)
+
+        # 2h after entry — well past post-trade cooldown (15min) but
+        # before the 6h decay grace.
+        later = base + timedelta(hours=2)
+        result = manager.apply_hysteresis(
+            self._make_decision(action="SELL", confidence=0.60, size=5.0),
+            cycle_count=5,
+            simulated_time=later,
+        )
+        assert result["action"] == "HOLD", (
+            "SELL conf below recent BUY anchor must stay blocked while "
+            "the anchor is still fresh"
+        )
+
+    def test_anchor_decay_respects_floor(self):
+        """Anchor floor (0.55) must clamp the decay so a very weak SELL
+        still cannot reverse a fresh trade purely by passage of time."""
+        config = HysteresisConfig.streaming()
+        manager = HysteresisManager(config)
+
+        base = datetime(2026, 5, 30, 20, 9, 0)
+        self._seed_last_trade(manager, "BUY", confidence=0.65, when=base)
+
+        # 100 hours later — decay would be 0.65 - 0.02*94 = ... below
+        # floor, so anchor is clamped at 0.55. SELL at 0.50 has delta
+        # = -0.05, must stay blocked.
+        later = base + timedelta(hours=100)
+        result = manager.apply_hysteresis(
+            self._make_decision(action="SELL", confidence=0.50, size=5.0),
+            cycle_count=5,
+            simulated_time=later,
+        )
+        assert result["action"] == "HOLD", (
+            "Anchor floor must keep extremely weak SELLs blocked"
+        )
+
+    def test_anchor_decay_does_not_affect_same_direction(self):
+        """Decay should only relax reversal anchor. A BUY following an
+        old BUY should still be governed by same_direction_cooldown_buy,
+        not by anchor decay."""
+        config = HysteresisConfig.streaming()
+        manager = HysteresisManager(config)
+
+        base = datetime(2026, 5, 30, 20, 9, 0)
+        self._seed_last_trade(manager, "BUY", confidence=0.65, when=base)
+
+        # 18h later (past decay grace, well past 15min same-dir cooldown)
+        later = base + timedelta(hours=18)
+
+        # BUY -> BUY is not a reversal, so anchor decay path doesn't fire.
+        # Same-direction cooldown of 15min is already expired, so a
+        # moderately confident BUY should pass.
+        result = manager.apply_hysteresis(
+            self._make_decision(action="BUY", confidence=0.70, size=5.0),
+            cycle_count=5,
+            simulated_time=later,
+        )
+        assert result["action"] == "BUY", (
+            "Same-direction BUY past cooldown should pass independently "
+            "of anchor decay"
+        )

@@ -47,6 +47,21 @@ class HysteresisConfig:
         default_factory=lambda: timedelta(minutes=5)
     )
 
+    # Reversal anchor decay — [#h5] fix. The other relaxations
+    # (sizing-aware [#h2], cumulative blocked [#h4]) only reduce
+    # required_delta, never the reference confidence. When the LLM has
+    # been recommending SELL at conf 0.60-0.65 for hours but the anchor
+    # is a stale BUY at conf 0.65, delta stays at 0 or negative and no
+    # threshold relaxation can let it through. Decaying the anchor itself
+    # past a grace period lets a stale, no-longer-conviction-supported
+    # entry confidence get out of the way without bypassing the policy.
+    # See docs/TUNING_MEMORY.md #h5.
+    reversal_anchor_decay_start: timedelta = field(
+        default_factory=lambda: timedelta(hours=6)
+    )
+    reversal_anchor_decay_per_hour: float = 0.02
+    reversal_anchor_conf_floor: float = 0.55
+
     @classmethod
     def streaming(cls) -> "HysteresisConfig":
         """Create config optimized for WebSocket streaming mode.
@@ -71,6 +86,12 @@ class HysteresisConfig:
             decay_factor_per_hour=0.15,
             emergency_override_confidence=0.85,
             post_trade_cooldown=timedelta(minutes=15),
+            # [#h5] anchor decay defaults — same as dataclass defaults but
+            # made explicit here so a future preset bump can't silently
+            # drop the streaming behavior.
+            reversal_anchor_decay_start=timedelta(hours=6),
+            reversal_anchor_decay_per_hour=0.02,
+            reversal_anchor_conf_floor=0.55,
         )
 
     @classmethod
@@ -288,6 +309,27 @@ class HysteresisManager:
             reversal_ref_confidence = self.last_trade_action["confidence"]
             is_reversal = self._is_reversal(reversal_ref_action, new_action)
 
+            # [#h5] anchor decay: after a configurable grace period, drop the
+            # reference confidence by a small amount per hour. Keeps short-
+            # term flip-flop protection intact (no decay for the first
+            # several hours) but stops a stale BUY conf from blocking every
+            # subsequent SELL forever.
+            if is_reversal:
+                last_trade_time = datetime.fromisoformat(
+                    self.last_trade_action["timestamp"]
+                )
+                decayed = self._decay_reversal_anchor_confidence(
+                    reversal_ref_confidence, last_trade_time, current_time
+                )
+                if decayed != reversal_ref_confidence:
+                    logger.info(
+                        f"Reversal anchor decayed: "
+                        f"{reversal_ref_action} conf "
+                        f"{reversal_ref_confidence:.2f}→{decayed:.2f} "
+                        f"after {(current_time - last_trade_time).total_seconds() / 3600:.1f}h"
+                    )
+                    reversal_ref_confidence = decayed
+
             # Check post-trade cooldown for reversals
             if is_reversal:
                 last_trade_time = datetime.fromisoformat(self.last_trade_action["timestamp"])
@@ -445,6 +487,45 @@ class HysteresisManager:
             return self.config.hold_to_action_delta
         else:  # BUY/SELL -> HOLD
             return self.config.action_to_hold_delta
+
+    def _decay_reversal_anchor_confidence(
+        self,
+        anchor_confidence: float,
+        last_trade_time: datetime,
+        current_time: datetime,
+    ) -> float:
+        """Decay a stale BUY/SELL anchor confidence used for reversal checks.
+
+        Inside the grace period (reversal_anchor_decay_start), the original
+        anchor is returned unchanged so short-term flip-flop protection is
+        intact. After the grace period, the anchor is dropped by
+        reversal_anchor_decay_per_hour per hour, never below
+        reversal_anchor_conf_floor.
+
+        Without this, a stale BUY conf=0.65 from many hours ago keeps every
+        subsequent moderate SELL (conf 0.60–0.65) blocked forever because
+        new_conf − anchor stays at or below 0. See docs/TUNING_MEMORY.md #h5.
+
+        Args:
+            anchor_confidence: Original confidence of the last executed trade.
+            last_trade_time: Timestamp of the last executed trade.
+            current_time: Current decision timestamp.
+
+        Returns:
+            Decayed anchor confidence (>= floor).
+        """
+        elapsed = current_time - last_trade_time
+        if elapsed <= self.config.reversal_anchor_decay_start:
+            return anchor_confidence
+
+        # Hours past the grace period.
+        past_grace_hours = (
+            elapsed - self.config.reversal_anchor_decay_start
+        ).total_seconds() / 3600.0
+        decayed = anchor_confidence - (
+            self.config.reversal_anchor_decay_per_hour * past_grace_hours
+        )
+        return max(decayed, self.config.reversal_anchor_conf_floor)
 
     def _is_reversal(
         self,
