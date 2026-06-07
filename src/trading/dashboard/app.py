@@ -32,12 +32,30 @@ st.set_page_config(
 )
 
 
-def get_log_dir() -> Path:
-    """Get log directory from environment or default."""
+ASSET_LOG_DIRS: dict[str, Path] = {
+    "BTC": Path("logs"),
+    "ETH": Path("logs/eth"),
+    "XRP": Path("logs/xrp"),
+}
+
+
+def get_log_dir(asset: str = "BTC") -> Path:
+    """Resolve log directory for a given asset.
+
+    TRADING_LOG_DIR env var still overrides everything (single-asset legacy mode).
+    Otherwise route by asset → predefined per-asset path.
+    """
     import os
 
-    log_dir = os.environ.get("TRADING_LOG_DIR", "logs")
-    return Path(log_dir)
+    override = os.environ.get("TRADING_LOG_DIR")
+    if override:
+        return Path(override)
+    return ASSET_LOG_DIRS.get(asset, Path("logs"))
+
+
+def available_assets() -> list[str]:
+    """List assets whose log directory exists on disk (BTC always first)."""
+    return [asset for asset, path in ASSET_LOG_DIRS.items() if path.exists()]
 
 
 def format_krw(value: float) -> str:
@@ -88,11 +106,11 @@ def get_status_emoji(status: str) -> str:
     return emojis.get(status.lower(), "")
 
 
-def render_sidebar(lang: Language) -> tuple[int, bool, int]:
+def render_sidebar(lang: Language) -> tuple[str, int, bool, int]:
     """Render sidebar settings.
 
     Returns:
-        Tuple of (days, auto_refresh, refresh_interval).
+        Tuple of (asset, days, auto_refresh, refresh_interval).
     """
     st.sidebar.title(get_text("page_icon", lang) + " " + get_text("page_title", lang))
 
@@ -104,6 +122,18 @@ def render_sidebar(lang: Language) -> tuple[int, bool, int]:
         format_func=lambda x: lang_options[x],
         index=0 if lang == "ko" else 1,
         key="language_selector",
+    )
+
+    # Asset selector — only show assets whose log dirs exist
+    assets = available_assets() or ["BTC"]
+    current_asset = st.session_state.get("asset", assets[0])
+    if current_asset not in assets:
+        current_asset = assets[0]
+    selected_asset = st.sidebar.selectbox(
+        get_text("asset", lang),
+        options=assets,
+        index=assets.index(current_asset),
+        key="asset_selector",
     )
 
     # Auto refresh
@@ -140,10 +170,16 @@ def render_sidebar(lang: Language) -> tuple[int, bool, int]:
         st.session_state["lang"] = selected_lang
         st.rerun()
 
-    return days, auto_refresh, refresh_interval
+    # Persist asset selection and rerun if changed
+    if selected_asset != current_asset:
+        st.session_state["asset"] = selected_asset
+        st.rerun()
+    st.session_state["asset"] = selected_asset
+
+    return selected_asset, days, auto_refresh, refresh_interval
 
 
-def render_portfolio_section(reader: HistoryReader, lang: Language) -> None:
+def render_portfolio_section(reader: HistoryReader, lang: Language, asset: str = "BTC") -> None:
     """Render portfolio status section."""
     st.header(get_text("portfolio_status", lang))
 
@@ -157,18 +193,19 @@ def render_portfolio_section(reader: HistoryReader, lang: Language) -> None:
     if indicators:
         latest_price = indicators[-1].btc_price
 
-    # Calculate values
+    # Calculate values — `btc` here is generic asset_balance (legacy variable name)
     total_invested = 0.0
     if isolated:
         krw = float(isolated.get("krw", 0))
-        btc = float(isolated.get("btc", 0))
+        # Read new key first, fall back to legacy "btc" for BTC's existing state file
+        btc = float(isolated.get("asset_balance", isolated.get("btc", 0)))
         initial = float(isolated.get("initial_capital", 200000))
         total_invested = float(isolated.get("total_invested", 0))
         total_value = krw + btc * latest_price if latest_price > 0 else krw
         pnl_pct = ((total_value - initial) / initial * 100) if initial > 0 else 0
     elif portfolio:
         krw = portfolio.get("cash_krw", 0)
-        btc = portfolio.get("btc_balance", 0)
+        btc = portfolio.get("asset_balance", portfolio.get("btc_balance", 0))
         initial = portfolio.get("initial_capital", 100000)
         total_invested = portfolio.get("total_invested_krw", 0)
         total_value = portfolio.get("total_value_krw", krw)
@@ -182,7 +219,7 @@ def render_portfolio_section(reader: HistoryReader, lang: Language) -> None:
     else:
         exposure = 0
 
-    # Unrealized P&L: BTC position only (current BTC value vs invested amount)
+    # Unrealized P&L: asset position only (current asset value vs invested amount)
     btc_value = btc * latest_price if latest_price > 0 else 0
     if total_invested > 0 and btc > 0:
         unrealized_pnl_pct = ((btc_value / total_invested) - 1) * 100
@@ -207,8 +244,8 @@ def render_portfolio_section(reader: HistoryReader, lang: Language) -> None:
 
     with col3:
         st.metric(
-            get_text("btc_balance", lang),
-            f"{btc:.8f} BTC",
+            get_text("asset_balance", lang).format(asset=asset),
+            f"{btc:.8f} {asset}",
             format_pct(unrealized_pnl_pct) if btc > 0 else None,
         )
 
@@ -237,7 +274,7 @@ def render_portfolio_section(reader: HistoryReader, lang: Language) -> None:
         )
 
 
-def render_charts_section(reader: HistoryReader, days: int, lang: Language) -> None:
+def render_charts_section(reader: HistoryReader, days: int, lang: Language, asset: str = "BTC") -> None:
     """Render indicator charts section."""
     st.header(get_text("indicator_charts", lang))
 
@@ -249,7 +286,7 @@ def render_charts_section(reader: HistoryReader, days: int, lang: Language) -> N
         return
 
     # Combined chart with trade markers
-    fig = create_combined_chart(indicators, lang, trades=trades)
+    fig = create_combined_chart(indicators, lang, trades=trades, asset=asset)
     st.plotly_chart(fig, use_container_width=True)
 
     # Individual charts in expander
@@ -503,17 +540,18 @@ def main() -> None:
     lang: Language = st.session_state["lang"]
 
     # Render sidebar and get settings
-    days, auto_refresh, refresh_interval = render_sidebar(lang)
+    asset, days, auto_refresh, refresh_interval = render_sidebar(lang)
 
-    # Initialize reader
-    log_dir = get_log_dir()
+    # Initialize reader for the selected asset
+    log_dir = get_log_dir(asset)
     reader = HistoryReader(log_dir)
+    st.caption(f"📁 `{log_dir}` · {asset}")
 
     # Main content
-    render_portfolio_section(reader, lang)
+    render_portfolio_section(reader, lang, asset=asset)
     st.divider()
 
-    render_charts_section(reader, days, lang)
+    render_charts_section(reader, days, lang, asset=asset)
     st.divider()
 
     render_derivatives_section(reader, days, lang)

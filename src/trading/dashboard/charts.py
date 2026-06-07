@@ -342,6 +342,7 @@ def create_combined_chart(
     indicators: list[IndicatorSnapshot],
     lang: Language = "ko",
     trades: list[dict] | None = None,
+    asset: str = "BTC",
 ) -> go.Figure:
     """Create combined chart with price, RSI, and MACD subplots.
 
@@ -349,10 +350,12 @@ def create_combined_chart(
         indicators: List of indicator snapshots.
         lang: Language for labels.
         trades: Optional list of trade dicts to show as markers on price chart.
+        asset: Asset symbol used to render the price label dynamically.
 
     Returns:
         Plotly figure with subplots.
     """
+    price_label = get_text("asset_price", lang).format(asset=asset)
     if not indicators:
         fig = go.Figure()
         fig.add_annotation(
@@ -372,7 +375,7 @@ def create_combined_chart(
         vertical_spacing=0.05,
         row_heights=[0.5, 0.25, 0.25],
         subplot_titles=(
-            get_text("btc_price", lang),
+            price_label,
             get_text("rsi", lang),
             get_text("macd", lang),
         ),
@@ -399,7 +402,7 @@ def create_combined_chart(
             x=timestamps,
             y=prices,
             mode="lines",
-            name=get_text("btc_price", lang),
+            name=price_label,
             line=dict(color="#F7931A", width=2),
         ),
         row=1,

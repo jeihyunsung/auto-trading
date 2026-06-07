@@ -12,6 +12,7 @@ TRANSLATIONS = {
 
         # Sidebar
         "language": "언어",
+        "asset": "자산",
         "auto_refresh": "자동 새로고침",
         "refresh_interval": "새로고침 간격 (초)",
         "days_to_show": "표시 기간 (일)",
@@ -22,6 +23,7 @@ TRANSLATIONS = {
         "total_value": "총 가치",
         "krw_balance": "KRW 잔고",
         "btc_balance": "BTC 잔고",
+        "asset_balance": "{asset} 잔고",
         "exposure": "노출도",
         "pnl": "손익",
         "initial_capital": "초기 자본",
@@ -29,6 +31,7 @@ TRANSLATIONS = {
         # Charts section
         "indicator_charts": "지표 차트",
         "btc_price": "BTC 가격",
+        "asset_price": "{asset} 가격",
         "rsi": "RSI",
         "macd": "MACD",
         "overbought": "과매수",
@@ -115,6 +118,7 @@ TRANSLATIONS = {
 
         # Sidebar
         "language": "Language",
+        "asset": "Asset",
         "auto_refresh": "Auto Refresh",
         "refresh_interval": "Refresh Interval (sec)",
         "days_to_show": "Days to Show",
@@ -125,6 +129,7 @@ TRANSLATIONS = {
         "total_value": "Total Value",
         "krw_balance": "KRW Balance",
         "btc_balance": "BTC Balance",
+        "asset_balance": "{asset} Balance",
         "exposure": "Exposure",
         "pnl": "P&L",
         "initial_capital": "Initial Capital",
@@ -132,6 +137,7 @@ TRANSLATIONS = {
         # Charts section
         "indicator_charts": "Indicator Charts",
         "btc_price": "BTC Price",
+        "asset_price": "{asset} Price",
         "rsi": "RSI",
         "macd": "MACD",
         "overbought": "Overbought",
