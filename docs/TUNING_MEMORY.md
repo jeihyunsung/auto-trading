@@ -26,7 +26,7 @@
 - [#l4](#l4) Volume spike false positive — 24h 약세 중에도 volume 13.2x → BUY 발생. 충분한 데이터 없음.
 - ~~[#l5](#l5) BUY 정체~~ — **자체 해소 (5/30 04:53)**. RSI 47.7로 하락하며 정상 BUY 발동. 옵션 A는 진입을 *지연*만 하고 *금지* 안 함을 검증.
 - [#l6](#l6) **RSI 22 극단 과매도 + bearish MTF → HOLD** (5/31). Trend Confirmation Rule이 작동. 며칠 후 결과(bottom vs 추가 하락)로 정책 평가.
-- Take-profit ([#t1](#t1)) 실전 발동 0회 — +1.5% 도달 케이스 부재. 시장 환경 영향.
+- Take-profit ([#t1](#t1)) 실전 발동 6회 (2026-06-04 첫 케이스) — 라더 6단계 + net +1.63% 확보. ride-the-trend 구조 정상 작동 확인.
 - ~~[#h5](#h5) SELL conf < last BUY conf 스테일메이트~~ — **Fix shipped + 가치 검증 완료** (commit `1ac6e3a`, 6/01). Anchor decay (6h grace, -0.02/h, floor 0.55) + 보조 prompt calibration. **6/01 실측**: stalemate 동안 5/30 BUY @ 109.14M → 6/01 stop-loss @ 106.64M (누적 -2.08% 손실, 그 중 stalemate 6h가 -0.5% 기여). VM 미배포 상태로 자체 해소되긴 했으나 fix 가치 정량 입증.
 
 ## Active Settings (요약)
@@ -131,7 +131,17 @@
 - **Fix**: `detect_take_profit()` ([#s1](#s1)과 대칭). unrealized_pnl > +1.5% 도달 시 50% 자동 매도 (`bypass_hysteresis=True`). 나머지 50%는 trend 따라 ride.
   - File: `src/trading/agents/decision_agent.py:262` · Commit `3175e9c`
 - **Settings**: `take_profit_pct=1.5`, `take_profit_sell_fraction=0.5`
-- **Outcome**: 실전 발동 0회 (5/24~5/28 동안 +1.5% 도달 케이스 없음). 시장이 횡보~약세였음.
+- **Outcome (5/24~5/28)**: 실전 발동 0회 — 시장 횡보~약세, +1.5% 도달 케이스 없음.
+- **Outcome (2026-06-04, 첫 실전 발동)**: 6/01 stop-loss로 cash 100% 복귀 후, 6/04 11:25 / 11:34 (KST) 두 차례 rapid_move BUY로 0.002604 BTC를 평균 93,933,773 KRW에 진입. 약 40분 후 unrealized P&L이 +1.50% 돌파하자 take-profit 사다리가 6회 연속 발동:
+  - 12:15:49 @ 95,428,000 (P&L +1.59%) — 50% 매도
+  - 12:23:05 @ 95,366,000 (P&L +1.55%) — 잔량의 50%
+  - 12:31:47 @ 95,664,000 (P&L +1.83%) — 잔량의 50%
+  - 12:37:38 @ 95,861,000 (P&L +2.07%) — 잔량의 50%
+  - 12:43:16 @ 96,038,000 (P&L +2.23%) — 잔량의 50%
+  - 12:49:01 @ 95,882,000 (P&L +2.13%) — 잔량의 50%, 0.000081 BTC만 잔존
+  
+  Gross +3,989 KRW (+1.63%), 수수료 차감 후 +3,838 KRW net (KRW 988,985 → 992,823). 첫 매도 시점에 100% 청산했을 경우와 비교하면 라더가 추가로 +96 KRW (+0.04%) 확보 — 가격이 단조 상승했기 때문에 라더 이득은 미미했지만, 반전 발생 시 보호 효과가 작동하는 구조 확인.
+- **Validation**: detect_take_profit() 정상 동작, bypass_hysteresis=True 경로로 hysteresis layer 우회. confidence 0.90 stamping 및 sell_fraction=0.5 sequential firing 검증.
 
 ### #l1 — LLM confidence calibration (strict prompt) {#l1}
 
